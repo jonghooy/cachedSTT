@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+*.nemo
+*.ckpt
+*.log
+.DS_Store
+nohup.out

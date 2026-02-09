@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>실시간 한국어 음성인식 데모</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', -apple-system, sans-serif;
+            background: #0f172a;
+            color: #e2e8f0;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 2rem;
+        }
+        h1 {
+            font-size: 1.5rem;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+            color: #f1f5f9;
+        }
+        .subtitle {
+            color: #64748b;
+            font-size: 0.85rem;
+            margin-bottom: 2rem;
+        }
+        .container {
+            width: 100%;
+            max-width: 720px;
+        }
+
+        /* 컨트롤 영역 */
+        .controls {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+        #btn-mic {
+            width: 64px;
+            height: 64px;
+            border-radius: 50%;
+            border: 3px solid #334155;
+            background: #1e293b;
+            color: #94a3b8;
+            font-size: 1.5rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+        #btn-mic:hover { border-color: #3b82f6; color: #3b82f6; }
+        #btn-mic.recording {
+            border-color: #ef4444;
+            background: #7f1d1d;
+            color: #fca5a5;
+            animation: pulse 1.5s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
+            50% { box-shadow: 0 0 0 12px rgba(239, 68, 68, 0); }
+        }
+        .control-info {
+            flex: 1;
+        }
+        #status {
+            font-size: 0.9rem;
+            font-weight: 500;
+            margin-bottom: 0.4rem;
+        }
+        .status-ready { color: #94a3b8; }
+        .status-recording { color: #ef4444; }
+        .status-connecting { color: #f59e0b; }
+
+        /* 오디오 레벨 바 */
+        .level-bar-container {
+            height: 6px;
+            background: #1e293b;
+            border-radius: 3px;
+            overflow: hidden;
+        }
+        #level-bar {
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(90deg, #22c55e, #eab308, #ef4444);
+            border-radius: 3px;
+            transition: width 0.05s;
+        }
+
+        /* 현재 발화 (Partial) */
+        .section-label {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: #64748b;
+            margin-bottom: 0.5rem;
+            margin-top: 1.5rem;
+        }
+        #partial-box {
+            background: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 8px;
+            padding: 1rem 1.2rem;
+            min-height: 60px;
+            font-size: 1.1rem;
+            line-height: 1.6;
+            color: #93c5fd;
+            position: relative;
+        }
+        #partial-box.has-text {
+            border-color: #3b82f6;
+        }
+        #partial-box .cursor {
+            display: inline-block;
+            width: 2px;
+            height: 1.1em;
+            background: #3b82f6;
+            margin-left: 2px;
+            vertical-align: text-bottom;
+            animation: blink 1s infinite;
+        }
+        @keyframes blink {
+            0%, 50% { opacity: 1; }
+            51%, 100% { opacity: 0; }
+        }
+        .placeholder {
+            color: #475569;
+            font-style: italic;
+        }
+
+        /* 인식 결과 (Final) */
+        #results-box {
+            background: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 8px;
+            padding: 1rem 1.2rem;
+            min-height: 200px;
+            max-height: 400px;
+            overflow-y: auto;
+            font-size: 0.95rem;
+            line-height: 1.8;
+        }
+        .utterance {
+            padding: 0.3rem 0;
+            border-bottom: 1px solid #1e293b;
+        }
+        .utterance:last-child { border-bottom: none; }
+        .utterance .text { color: #e2e8f0; }
+        .utterance .meta {
+            font-size: 0.7rem;
+            color: #475569;
+            margin-left: 0.5rem;
+        }
+        #results-box .placeholder {
+            color: #475569;
+            font-style: italic;
+        }
+
+        /* 통계 */
+        .stats {
+            display: flex;
+            gap: 1.5rem;
+            margin-top: 1.5rem;
+            font-size: 0.8rem;
+            color: #64748b;
+        }
+        .stat-value { color: #94a3b8; font-weight: 600; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>실시간 한국어 음성인식</h1>
+        <p class="subtitle">Nemotron Speech ASR 0.6B Transfer Learning (WER 16.3%)</p>
+
+        <div class="controls">
+            <button id="btn-mic" onclick="toggleRecording()">&#x1F3A4;</button>
+            <div class="control-info">
+                <div id="status" class="status-ready">마이크 버튼을 눌러 시작</div>
+                <div class="level-bar-container">
+                    <div id="level-bar"></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="section-label">현재 발화 (Partial)</div>
+        <div id="partial-box">
+            <span class="placeholder">음성을 입력하면 여기에 실시간으로 표시됩니다...</span>
+        </div>
+
+        <div class="section-label">인식 결과 (Final)</div>
+        <div id="results-box">
+            <span class="placeholder">확정된 인식 결과가 여기에 쌓입니다...</span>
+        </div>
+
+        <div class="stats">
+            <div>발화 수: <span class="stat-value" id="stat-utterances">0</span></div>
+            <div>총 시간: <span class="stat-value" id="stat-duration">0.0s</span></div>
+        </div>
+    </div>
+
+    <script>
+    const TARGET_SAMPLE_RATE = 16000;
+    const CHUNK_MS = 250;  // 250ms 마다 서버로 전송
+
+    let ws = null;
+    let audioContext = null;
+    let mediaStream = null;
+    let workletNode = null;
+    let isRecording = false;
+    let utteranceCount = 0;
+    let totalDuration = 0;
+
+    // AudioWorklet 프로세서 코드 (인라인)
+    const processorCode = `
+    class PCMProcessor extends AudioWorkletProcessor {
+        constructor() {
+            super();
+            this.buffer = [];
+            this.chunkSize = 0;
+            this.ratio = 1;
+            this.initialized = false;
+        }
+
+        process(inputs) {
+            const input = inputs[0];
+            if (!input || !input[0]) return true;
+
+            if (!this.initialized) {
+                this.ratio = sampleRate / 16000;
+                this.chunkSize = Math.floor(16000 * ${CHUNK_MS} / 1000);
+                this.initialized = true;
+            }
+
+            const samples = input[0];
+
+            // 다운샘플링 (nearest neighbor)
+            for (let i = 0; i < samples.length; i += this.ratio) {
+                const idx = Math.min(Math.floor(i), samples.length - 1);
+                this.buffer.push(samples[idx]);
+            }
+
+            if (this.buffer.length >= this.chunkSize) {
+                // float32 → int16 변환
+                const int16 = new Int16Array(this.chunkSize);
+                for (let i = 0; i < this.chunkSize; i++) {
+                    const s = Math.max(-1, Math.min(1, this.buffer[i]));
+                    int16[i] = s < 0 ? s * 32768 : s * 32767;
+                }
+                this.port.postMessage(int16.buffer, [int16.buffer]);
+                this.buffer = this.buffer.slice(this.chunkSize);
+            }
+
+            return true;
+        }
+    }
+    registerProcessor('pcm-processor', PCMProcessor);
+    `;
+
+    async function toggleRecording() {
+        if (isRecording) {
+            stopRecording();
+        } else {
+            await startRecording();
+        }
+    }
+
+    async function startRecording() {
+        const btn = document.getElementById('btn-mic');
+        const status = document.getElementById('status');
+
+        // WebSocket 연결
+        status.textContent = '서버 연결 중...';
+        status.className = 'status-connecting';
+
+        const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        ws = new WebSocket(`${protocol}//${location.host}/ws`);
+
+        ws.onopen = async () => {
+            try {
+                // 마이크 접근
+                mediaStream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        channelCount: 1,
+                        sampleRate: { ideal: 48000 },
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                    }
+                });
+
+                audioContext = new AudioContext();
+                const source = audioContext.createMediaStreamSource(mediaStream);
+
+                // AudioWorklet 등록 (인라인 Blob)
+                const blob = new Blob([processorCode], { type: 'application/javascript' });
+                const url = URL.createObjectURL(blob);
+                await audioContext.audioWorklet.addModule(url);
+                URL.revokeObjectURL(url);
+
+                workletNode = new AudioWorkletNode(audioContext, 'pcm-processor');
+                workletNode.port.onmessage = (e) => {
+                    if (ws && ws.readyState === WebSocket.OPEN) {
+                        ws.send(e.data);
+                    }
+                };
+                source.connect(workletNode);
+                workletNode.connect(audioContext.destination);
+
+                isRecording = true;
+                btn.classList.add('recording');
+                btn.innerHTML = '&#x23F9;';
+                status.textContent = '녹음 중...';
+                status.className = 'status-recording';
+
+            } catch (err) {
+                console.error('Mic error:', err);
+                status.textContent = '마이크 접근 실패: ' + err.message;
+                ws.close();
+            }
+        };
+
+        ws.onmessage = (e) => {
+            const msg = JSON.parse(e.data);
+            handleMessage(msg);
+        };
+
+        ws.onclose = () => {
+            if (isRecording) stopRecording();
+        };
+
+        ws.onerror = (e) => {
+            console.error('WebSocket error:', e);
+            status.textContent = '서버 연결 실패';
+            status.className = 'status-ready';
+        };
+    }
+
+    function stopRecording() {
+        const btn = document.getElementById('btn-mic');
+        const status = document.getElementById('status');
+
+        isRecording = false;
+        btn.classList.remove('recording');
+        btn.innerHTML = '&#x1F3A4;';
+        status.textContent = '마이크 버튼을 눌러 시작';
+        status.className = 'status-ready';
+
+        if (workletNode) { workletNode.disconnect(); workletNode = null; }
+        if (audioContext) { audioContext.close(); audioContext = null; }
+        if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
+        if (ws) { ws.close(); ws = null; }
+
+        document.getElementById('level-bar').style.width = '0%';
+        document.getElementById('partial-box').innerHTML =
+            '<span class="placeholder">음성을 입력하면 여기에 실시간으로 표시됩니다...</span>';
+    }
+
+    function handleMessage(msg) {
+        switch (msg.type) {
+            case 'level':
+                document.getElementById('level-bar').style.width = (msg.value * 100) + '%';
+                break;
+
+            case 'partial':
+                const partialBox = document.getElementById('partial-box');
+                partialBox.classList.add('has-text');
+                partialBox.innerHTML = msg.text + '<span class="cursor"></span>';
+                break;
+
+            case 'final':
+                // Partial 영역 초기화
+                const pBox = document.getElementById('partial-box');
+                pBox.classList.remove('has-text');
+                pBox.innerHTML = '<span class="placeholder">다음 발화 대기 중...</span>';
+
+                // Final 결과 추가
+                const resultsBox = document.getElementById('results-box');
+                if (resultsBox.querySelector('.placeholder')) {
+                    resultsBox.innerHTML = '';
+                }
+
+                const div = document.createElement('div');
+                div.className = 'utterance';
+                div.innerHTML = `<span class="text">${msg.text}</span><span class="meta">${msg.duration}s</span>`;
+                resultsBox.appendChild(div);
+                resultsBox.scrollTop = resultsBox.scrollHeight;
+
+                // 통계 업데이트
+                utteranceCount++;
+                totalDuration += msg.duration;
+                document.getElementById('stat-utterances').textContent = utteranceCount;
+                document.getElementById('stat-duration').textContent = totalDuration.toFixed(1) + 's';
+                break;
+        }
+    }
+    </script>
+</body>
+</html>
