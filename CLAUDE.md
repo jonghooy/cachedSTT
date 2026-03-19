@@ -20,30 +20,34 @@ NeMo Cache-Aware Streaming 한국어 ASR 모델 훈련 프로젝트.
 | Framework | NeMo 2.6.1, PyTorch 2.6, Lightning 2.5 |
 | Conda env | `nemo-asr` |
 
-### 3단계 학습 전략 (검증용 축소 에포크)
-
-현재는 소량 데이터(764시간)로 접근법 검증 목적이므로 에포크를 축소하여 진행.
+### 4단계 학습 전략
 
 ```
 Stage 1: Decoder Warmup (3 epochs)
   - Encoder 전체 freeze, Decoder+Joint만 학습
   - lr=5.0, warmup=5000, fastemit=0.01
   - batch=8, accumulate=8, effective=64
-  - 목표: WER < 0.8 → 결과: 0.518 (달성)
+  - 결과: val_wer 0.518
 
 Stage 2: Upper Encoder (5 epochs)
   - Layer 0-11 freeze, 12-23 + Decoder 학습
   - lr=2.0, warmup=10000, fastemit=0.005
-  - 목표: WER < 0.3 → 결과: 0.194 (달성)
+  - 결과: val_wer 0.194
 
 Stage 3: Full Fine-tune (5 epochs)
   - 전체 unfreeze, lr=0.5, warmup=5000
-  - 목표: WER < 0.15 → 결과: 0.163 (근접)
+  - 결과: val_wer 0.163
+
+Stage 4: Punctuation Fine-tune (3 epochs) ← 진행 중
+  - Stage 3 체크포인트에서 시작, 전체 unfreeze
+  - lr=0.3, warmup=3000, fastemit=0.005
+  - 구두점(. ?) 포함 데이터로 학습
+  - 목적: 모델이 문장 끝에 구두점 출력 → 서버에서 EOS 감지
 ```
 
 ---
 
-## 현재 진행 상황 (2026-02-08)
+## 현재 진행 상황 (2026-02-09)
 
 ### Stage 1: 완료
 
@@ -83,12 +87,31 @@ Stage 3: Full Fine-tune (5 epochs)
 | 3 | 0.169 | 0.166 |
 | 4 | 0.164 | **0.163** |
 
+### Stage 4: 구두점 학습 — 진행 중 (2026-02-09)
+
+- Stage 3 체크포인트에서 시작, 구두점(. ?) 포함 데이터로 Fine-tune
+- **목적**: 모델이 문장 끝에 . 또는 ?를 출력하게 학습 → 서버에서 `"." in text`로 EOS 감지
+- 학습 데이터: `train_manifest_punct.json` (319,354 샘플, 60.4% 구두점 포함)
+- 검증 데이터: `val_manifest_punct.json` (17,715 샘플)
+- 설정: lr=0.3, warmup=3000, max_epochs=3, 전체 unfreeze
+
+**구두점 데이터 준비 과정**:
+- 기존 train_manifest에 이미 35.3% 구두점 포함 (원본 유지)
+- 나머지 64.7% 중 25.0%에 규칙 기반 구두점 추가 (한국어 종결어미 패턴)
+- 스크립트: `scripts/add_punctuation_to_manifest.py`
+
+**배경: 규칙 기반 EOS → 학습 기반으로 전환**:
+- 서버에 규칙 기반 EOS 감지 (한국어 종결어미 regex) 시도 → 오류 증가
+- 대안: 모델 자체가 구두점을 출력하게 학습 (토크나이저에 `.` ID=266, `?` ID=450 이미 존재)
+- Stage 4 완료 후 서버에서 `"." in text`로 간단하게 EOS 감지 가능
+
 ### 전체 val_wer 추이 요약
 
 ```
 Stage 1 (Decoder):     0.836 → 0.518  (3 epochs)
 Stage 2 (Upper Enc):   0.335 → 0.194  (5 epochs)
 Stage 3 (Full):        0.182 → 0.163  (5 epochs)
+Stage 4 (Punctuation): 진행 중...      (3 epochs)
 ```
 
 **접근법 검증 결과: 성공** — 영어 Nemotron 0.6B에서 한국어 WER 16.3%까지 도달 (764시간 데이터)
@@ -118,8 +141,10 @@ experiments/
 ├── Stage1-Decoder-Warmup/checkpoints/        # Stage 1 중간 체크포인트
 ├── Stage2-Upper-Encoder_final.nemo           # Stage 2 최종 (val_wer=0.194)
 ├── Stage2-Upper-Encoder/checkpoints/         # Stage 2 중간 체크포인트
-├── Stage3-Full-Finetune_final.nemo           # Stage 3 최종 (val_wer=0.169)
-└── Stage3-Full-Finetune/checkpoints/         # Stage 3 중간 체크포인트
+├── Stage3-Full-Finetune_final.nemo           # Stage 3 최종 (val_wer=0.163)
+├── Stage3-Full-Finetune/checkpoints/         # Stage 3 중간 체크포인트
+├── Stage4-Punctuation_final.nemo             # Stage 4 (학습 중...)
+└── Stage4-Punctuation/checkpoints/           # Stage 4 중간 체크포인트
 ```
 
 ### 이전 중단 이력
@@ -162,6 +187,18 @@ CUDA_VISIBLE_DEVICES=0 nohup python /home/jonghooy/work/timbel-asr-pilot/scripts
     > /home/jonghooy/work/timbel-asr-pilot/logs/train_transfer_stage3.log 2>&1 &
 ```
 
+### Stage 4 시작 (Stage 3 완료 후, 구두점 학습)
+```bash
+source /home/jonghooy/miniconda3/etc/profile.d/conda.sh && conda activate nemo-asr && \
+CUDA_VISIBLE_DEVICES=0 nohup python /home/jonghooy/work/timbel-asr-pilot/scripts/korean_streaming_asr_train.py \
+    --stage 4 \
+    --resume_from /home/jonghooy/work/timbel-asr-pilot/experiments/Stage3-Full-Finetune_final.nemo \
+    --train_manifest /mnt/usb_2tb/timbel-data/manifests/train_manifest_punct.json \
+    --val_manifest /mnt/usb_2tb/timbel-data/manifests/val_manifest_punct.json \
+    --max_epochs 3 \
+    > /home/jonghooy/work/timbel-asr-pilot/logs/train_transfer_stage4.log 2>&1 &
+```
+
 ### 모니터링
 ```bash
 # 실시간 로그
@@ -198,10 +235,112 @@ pkill -f "korean_streaming_asr_train.py"
 
 ---
 
+## 실시간 Cache-Aware Streaming 서버 (2026-02-09)
+
+### 아키텍처 전환: Offline → Streaming
+
+기존 서버는 오디오가 들어올 때마다 **전체 버퍼를 `model.transcribe()`로 재전사**하는 방식 (O(buffer) per step).
+NeMo의 `conformer_stream_step()` API를 사용하여 **160ms 청크 단위 증분 처리** (O(1) per step)로 전환.
+
+| 항목 | 기존 (Offline) | 현재 (Streaming) |
+|------|---------------|-----------------|
+| 추론 방식 | `model.transcribe()` 전체 재전사 | `conformer_stream_step()` 증분 |
+| 복잡도 | O(buffer) per step | O(1) per step |
+| 지연 | 버퍼 길어지면 증가 | ~170ms 고정 |
+| 인코더 캐시 | 없음 | `cache_last_channel`, `cache_last_time` |
+| 디코더 상태 | 매번 초기화 | `previous_hypotheses` 연속 |
+
+### 핵심 구현: `realtime_demo/server.py`
+
+**StreamingSession 클래스** — WebSocket 연결별 상태 관리:
+- 오디오 버퍼 + mel 프레임 추적 (`audio_buffer`, `mel_buffer_idx`, `step`)
+- 인코더 캐시 3종: `cache_last_channel (24,1,70,1024)`, `cache_last_time (24,1,1024,8)`, `cache_last_channel_len (1,)`
+- RNN-T 디코더 연속성: `previous_hypotheses` 스텝 간 전달
+- 블랭크 토큰 카운터: `blank_step_count` (토큰 수 변화 없으면 증가)
+
+**스트리밍 파이프라인**:
+```
+WebSocket PCM int16 (250ms)
+  → float32 변환 → audio_buffer 누적
+  → 전체 mel 변환 (streaming preprocessor: dither=0, pad_to=0)
+  → mel_buffer_idx부터 chunk_size 단위로 청크 추출
+  → conformer_stream_step() × N개 청크
+  → 텍스트 추출 → partial/final WebSocket 전송
+```
+
+**스트리밍 설정** (`att_context_size=[70, 1]`):
+```
+chunk_size:            [9, 16]     # 첫 스텝 9프레임, 이후 16프레임
+shift_size:            [9, 16]     # mel 슬라이딩 간격
+pre_encode_cache_size: [0, 9]      # 이전 프레임 캐시
+drop_extra_pre_encoded: 2          # 중복 제거
+valid_out_len:          2          # 유효 출력 길이
+```
+
+**끝점 감지 (현재)**:
+- 무음 0.8초 + 블랭크 3 스텝 → Final
+- 무음 1.5초 단독 → Final
+- 버퍼 30초 → 강제 Final
+- 배경 노이즈 자동 보정 (첫 4청크 = ~1초)
+
+### 해결한 이슈
+
+**1. `loop_labels` 방향 (학습 vs 추론)**
+- **학습**: `loop_labels: false` + `use_cuda_graph_decoder: false` (RTX 5090 CUDA graphs 비호환)
+- **추론 (스트리밍)**: `loop_labels: true` + `use_cuda_graph_decoder: false`
+- `loop_labels=false`에서 `previous_hypotheses` 전달 시 `NotImplementedError` 발생
+- 스트리밍 서버는 반드시 `loop_labels=true` 사용
+
+**2. step_idx 추적 버그**
+- `get_available_chunks()`에서 `self.step`을 증가시킨 후 `run_streaming_step()`에서 사용 → 잘못된 `drop_extra_pre_encoded` 값
+- 수정: `step_idx = self.step` 저장 후 증가, `run_streaming_step(mel_chunk, chunk_length, step_idx)`로 전달
+
+**3. 스트리밍 전처리기 분리**
+- 모델 내장 preprocessor는 `dither > 0`, `pad_to > 0` → 스트리밍에 부적합
+- 별도 preprocessor 생성: `dither=0.0`, `pad_to=0` (길이 패딩 없음)
+- `model._cfg.preprocessor`에서 deep copy 후 수정
+
+**4. GPU 스레드 직렬화**
+- `ThreadPoolExecutor(max_workers=1)` → GPU 추론 직렬화
+- WebSocket 이벤트 루프에서 `loop.run_in_executor()` 비동기 호출
+
+### 실행 방법
+
+```bash
+# 서버 시작
+source /home/jonghooy/miniconda3/etc/profile.d/conda.sh && conda activate nemo-asr && \
+cd /home/jonghooy/work/cachedSTT/realtime_demo && \
+CUDA_VISIBLE_DEVICES=0 nohup python server.py > server.log 2>&1 &
+
+# 브라우저에서 http://localhost:3000 접속
+
+# 서버 종료
+pkill -f "realtime_demo/server.py"
+```
+
+### 성능
+
+| 항목 | 값 |
+|------|-----|
+| 모델 로드 | 6.2초 |
+| GPU 메모리 | 2.37GB / 32GB |
+| 스텝 지연 | ~170ms (160ms 청크 + 추론) |
+| 워밍업 | 더미 오디오 1회 스트리밍 스텝 |
+
+### TODO (Stage 4 완료 후)
+
+- [ ] `MODEL_PATH`를 Stage 4 체크포인트로 교체
+- [ ] 구두점 기반 EOS 감지 추가: `"." in text` 또는 `"?" in text` → 적응형 silence 임계값 하향
+- [ ] 적응형 끝점 계획 (`cheeky-finding-allen.md`) 반영 검토
+
+---
+
 ## Key Paths
 
 | 항목 | 경로 |
 |------|------|
+| 스트리밍 서버 | `/home/jonghooy/work/cachedSTT/realtime_demo/server.py` |
+| 프론트엔드 | `/home/jonghooy/work/cachedSTT/realtime_demo/static/index.html` |
 | 훈련 프로젝트 | `/home/jonghooy/work/timbel-asr-pilot/` |
 | 학습 스크립트 | `scripts/korean_streaming_asr_train.py` |
 | Config 파일 | `configs/korean_streaming_rnnt_transfer.yaml` |
@@ -209,8 +348,11 @@ pkill -f "korean_streaming_asr_train.py"
 | 한국어 토크나이저 | `tokenizer/tokenizer_unigram_4096/tokenizer_spe_unigram_v4096/` |
 | 학습 데이터 | `/mnt/usb_2tb/timbel-data/manifests/train_manifest.json` |
 | 검증 데이터 | `/mnt/usb_2tb/timbel-data/manifests/val_manifest.json` |
-| 실험 결과 | `experiments/Stage{1,2,3}-*/` |
-| 훈련 로그 | `logs/train_transfer_stage{1,2,3}.log` |
+| 구두점 학습 데이터 | `/mnt/usb_2tb/timbel-data/manifests/train_manifest_punct.json` |
+| 구두점 검증 데이터 | `/mnt/usb_2tb/timbel-data/manifests/val_manifest_punct.json` |
+| 구두점 추가 스크립트 | `scripts/add_punctuation_to_manifest.py` |
+| 실험 결과 | `experiments/Stage{1,2,3,4}-*/` |
+| 훈련 로그 | `logs/train_transfer_stage{1,2,3,4}.log` |
 | TensorBoard | `experiments/Stage*/version_*/` |
 | 모델 아키텍처 문서 | `/home/jonghooy/work/cachedSTT/MODEL_ARCHITECTURE.md` |
 
