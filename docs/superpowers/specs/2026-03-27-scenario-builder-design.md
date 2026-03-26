@@ -113,8 +113,9 @@
     ],
     "description": "고객이 카드 분실/도난을 신고하려는 의도"
   },
+  "schema_version": 1,
   "slots": {
-    "card_number": { "type": "string", "required": true, "extract": "llm", "prompt": "카드번호 16자리를 말씀해주세요" },
+    "card_number": { "type": "string", "required": true, "extract": "regex", "pattern": "\\d{4}[- ]?\\d{4}[- ]?\\d{4}[- ]?\\d{4}", "prompt": "카드번호 16자리를 말씀해주세요" },
     "loss_type": { "type": "enum", "required": true, "extract": "llm", "values": ["분실", "도난"], "prompt": "분실이신가요, 도난이신가요?" },
     "reissue": { "type": "boolean", "required": false, "extract": "llm", "prompt": "카드 재발급을 원하시나요?" }
   },
@@ -123,7 +124,7 @@
   "metadata": {
     "created_at": "2026-03-27T10:00:00Z",
     "updated_at": "2026-03-27T12:30:00Z",
-    "test_coverage": 0.92,
+    "test_coverage": 0.92,       // float 0-1. 배포 시 시뮬레이션으로 산출. (테스트된 노드 / 전체 노드). 0.9 이상이면 배포 허용.
     "execution_count": 0,
     "avg_completion_rate": null
   }
@@ -142,10 +143,14 @@
 { "id": "n2", "type": "slot_collect", "target_slot": "card_number", "max_retries": 3, "retry_prompt": "다시 한번 말씀해주시겠어요?", "fail_action": "transfer" }
 ```
 
+슬롯의 `extract` 방식: `"llm"` (LLM 추출), `"regex"` (정규식 매칭, `pattern` 필드 필요). 카드번호/전화번호 등 정형 데이터는 regex가 빠르고 정확.
+
 **3. Condition** — 조건 분기 (규칙 or LLM)
 ```json
-{ "id": "n3", "type": "condition", "mode": "rule", "rule": "slots.loss_type == '도난'", "branches": { "true": "n4_police", "false": "n4_normal" } }
+{ "id": "n3", "type": "condition", "mode": "rule", "rule": { "field": "slots.loss_type", "op": "eq", "value": "도난" } }
 ```
+
+Rule 모드는 안전한 표현식 평가기를 사용한다 (eval 금지). 지원 연산자: `eq`, `neq`, `contains`, `gt`, `lt`, `exists`, `in`. 복합 조건은 `{"and": [...]}`, `{"or": [...]}` 로 표현.
 
 **4. API Call** — 외부 API 호출
 ```json
@@ -169,7 +174,7 @@
 
 **8. Confirm** — 슬롯 값 확인
 ```json
-{ "id": "n9", "type": "confirm", "template": "카드번호 {{slots.card_number}}, {{slots.loss_type}} 맞으시죠?", "on_yes": "n5", "on_no": "n2" }
+{ "id": "n9", "type": "confirm", "template": "카드번호 {{slots.card_number}}, {{slots.loss_type}} 맞으시죠?" }
 ```
 
 **9. RAG Search** — Knowledge Service 검색
@@ -179,15 +184,26 @@
 
 ### Edge Schema
 
+모든 라우팅은 edges 배열로 통합한다. 노드 내부에 분기 참조를 두지 않는다.
+
 ```json
 { "from": "n1", "to": "n2" }
+{ "from": "n3", "to": "n4_police", "label": "true" }
+{ "from": "n3", "to": "n4_normal", "label": "false" }
+{ "from": "n9", "to": "n5", "label": "yes" }
+{ "from": "n9", "to": "n2", "label": "no" }
 ```
 
-Condition, confirm 노드의 분기는 노드 내 `branches`, `on_yes`/`on_no`로 처리.
+- 기본 edge: `label` 없음 (선형 흐름)
+- Condition edge: `label`이 분기 결과값 ("true"/"false" 또는 커스텀)
+- Confirm edge: `label`이 "yes" 또는 "no"
+- 비주얼 에디터에서 edge = 화살표로 일관되게 렌더링
 
 ### DB Schema (Knowledge Service)
 
-- **scenarios** (SQLite): `id, name, description, graph_json, version, status, priority, created_by, source_json, triggers_json, slots_json, metadata_json, created_at, updated_at`
+- **scenarios** (SQLite): `id, name, description, schema_version, graph_json, version, status, priority, created_by, source_json, triggers_json, slots_json, metadata_json, created_at, updated_at`
+
+**Schema Versioning:** `schema_version`은 시나리오 JSON 구조 버전 (현재 1). 엔진 업그레이드 시 schema_version이 달라지면 모든 active 시나리오를 재검증 후 재배포 필요. `version`은 시나리오 콘텐츠 수정 버전.
 - **trigger_examples** (ChromaDB): `id: "{scenario_id}_{idx}", embedding: BGE-M3(text), metadata: {scenario_id, text}`
 - **scenario_logs** (SQLite): `id, scenario_id, session_id, completed, nodes_visited, slots_filled, duration_sec, exit_reason, created_at`
 
@@ -215,16 +231,20 @@ Step 2~4 실패 시 Claude에게 오류 전달 → 재생성 (최대 3회).
 ### 3-Panel Layout
 
 - **좌측 패널**: 시나리오 목록 (상태별 필터) + AI 채팅 패널 (생성/수정 자연어 요청)
-- **중앙 캔버스**: React Flow 그래프 에디터. 노드 드래그앤드롭, 줌/패닝/미니맵. 노드 색상 = 타입별 구분
+- **중앙 캔버스**: Vue Flow (vueflow.dev) 그래프 에디터. 노드 드래그앤드롭, 줌/패닝/미니맵. 노드 색상 = 타입별 구분
 - **우측 패널**: 선택된 노드 속성 편집, 슬롯 현황, 검증 결과/경고
 
 ### Node Color Scheme
 
-- 파랑: Speak, API Call
+- 파랑: Speak
 - 초록: Slot Collect
 - 주황: Confirm
 - 보라: Condition
 - 회색: End
+- 남색: API Call
+- 청록: RAG Search
+- 하늘: LLM Response
+- 빨강: Transfer
 
 ### AI Chat Integration
 
@@ -255,14 +275,18 @@ realtime_demo/
 ```python
 class DialogueEngine:
     async def process_utterance(self, session, text, prosody) -> DialogueResult:
+        # prosody는 session.scenario_state["prosody"]에 저장하여
+        # llm_response 노드에서 감정 컨텍스트로 활용
         if session.dialogue_mode == "freeform":
             match = await self.intent_matcher.match(text)
             if match and match.confidence > 0.7:
                 session.enter_scenario(match.scenario)
+                session.scenario_state["prosody"] = prosody
                 return await self._execute_current_node(session, text)
             else:
                 return DialogueResult(mode="freeform", should_use_s2s=True)
         elif session.dialogue_mode == "scenario":
+            session.scenario_state["prosody"] = prosody
             return await self._execute_current_node(session, text)
 ```
 
@@ -288,13 +312,20 @@ class StreamingSession:
     dialogue_mode: str = "freeform"
     scenario_state: dict = {
         "scenario_id": None,
+        "scenario_version": None,   # 시작 시 버전 고정 (캐시 갱신 영향 안 받음)
         "current_node": None,
         "slots": {},
         "variables": {},
         "history": [],
-        "retry_count": 0
+        "retry_count": 0,
+        "prosody": None,            # 현재 턴의 prosody 컨텍스트
+        "stack": []                  # 시나리오 중첩 스택 (깊이 2 제한)
     }
 ```
+
+**시나리오 스택:** 시나리오 A 진행 중 새 intent 감지 시, 현재 `scenario_state`를 `stack`에 push하고 새 시나리오 진입. 새 시나리오 완료 후 `stack`에서 pop하여 이전 시나리오 복귀. `len(stack) >= 2`이면 중첩 거부 → freeform 폴백.
+
+**버전 고정:** `enter_scenario()` 시 시나리오 JSON을 세션에 복사. 캐시 갱신이 진행 중인 세션에 영향을 주지 않는다.
 
 ### Auto-Advance
 
@@ -323,20 +354,36 @@ class StreamingSession:
 | POST | /api/scenarios/{id}/validate | 구조 + 시뮬레이션 + 트리거 검증 |
 | POST | /api/scenarios/{id}/simulate | 대화 시뮬레이션만 실행 |
 
-### Brain API
+### Knowledge Service → Brain 전용 API (Knowledge에서 호스팅, Brain이 호출)
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | /api/brain/scenarios | active 시나리오 전체 (캐시용, version 타임스탬프 포함) |
-| POST | /api/brain/match-intent | 임베딩 유사도 매칭 |
+| GET | /api/brain/scenarios | active 시나리오 전체 (그래프 JSON + 트리거 벡터, version 타임스탬프 포함) |
 | POST | /api/brain/log-execution | 시나리오 실행 로그 수집 |
+
+### Brain 내부 API (Brain에서 호스팅, Knowledge가 호출)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | /api/knowledge/refresh | 시나리오 캐시 갱신 트리거 (기존 엔드포인트 확장) |
+
+### Brain 내부 처리 (HTTP API 아님)
+
+- **Intent 매칭**: Brain이 로컬 캐시 벡터로 cosine similarity 계산 (~1ms). HTTP 호출 불필요.
 
 ### Brain ↔ Knowledge Communication
 
-1. **Brain 시작 시**: GET /api/brain/scenarios → 캐시 + 트리거 벡터 로컬 저장
-2. **시나리오 배포 시**: Knowledge → POST /api/knowledge/refresh → Brain 캐시 갱신
-3. **인텐트 매칭**: Brain이 로컬 벡터 cosine similarity (~1ms) → top-3 → LLM 판정 (Knowledge HTTP 호출 불필요)
-4. **실행 로그**: Brain → POST /api/brain/log-execution (비동기, fire-and-forget)
+1. **Brain 시작 시**: Brain → GET /api/brain/scenarios (Knowledge) → 시나리오 + 트리거 벡터 캐시
+2. **시나리오 배포 시**: Knowledge → POST /api/knowledge/refresh (Brain) → Brain이 GET /api/brain/scenarios 재호출
+3. **인텐트 매칭**: Brain 로컬 벡터 cosine similarity → top-3 → Qwen LLM 판정
+4. **실행 로그**: Brain → POST /api/brain/log-execution (Knowledge, 비동기 fire-and-forget)
+
+### API 인증 및 Rate Limiting
+
+- Knowledge Service의 시나리오 API는 API key 기반 인증 적용
+- `/api/scenarios/generate` (Claude API 호출): rate limit 5회/분 (비용 제어)
+- `/api/scenarios/{id}/validate` (시뮬레이션 포함): rate limit 10회/분
+- Brain ↔ Knowledge 내부 통신: 내부 네트워크 신뢰 (별도 인증 없음)
 
 ## Error Handling
 
