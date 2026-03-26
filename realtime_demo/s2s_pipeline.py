@@ -88,8 +88,7 @@ class LLMEngine:
 
     async def generate_stream(
         self,
-        user_text: str,
-        system_prompt: str = SYSTEM_PROMPT,
+        messages: list,
         max_tokens: int = LLM_MAX_TOKENS,
         temperature: float = LLM_TEMPERATURE,
     ) -> AsyncGenerator[str, None]:
@@ -99,10 +98,7 @@ class LLMEngine:
 
         payload = {
             "model": self.model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_text},
-            ],
+            "messages": messages,
             "max_tokens": max_tokens,
             "temperature": temperature,
             "top_p": LLM_TOP_P,
@@ -113,6 +109,10 @@ class LLMEngine:
         async with self._client.stream(
             "POST", "/chat/completions", json=payload
         ) as response:
+            # vLLM context length 초과 시 400 에러
+            if response.status_code == 400:
+                body = await response.aread()
+                raise ValueError(f"vLLM rejected request: {body.decode()}")
             async for line in response.aiter_lines():
                 if not line.startswith("data: "):
                     continue
@@ -200,6 +200,51 @@ class TTSEngine:
         self._loaded = False
 
 
+MAX_HISTORY_CHARS = 1200
+MAX_HISTORY_TURNS = 6
+
+
+def _truncate_history(history: list, max_chars: int = MAX_HISTORY_CHARS, max_turns: int = MAX_HISTORY_TURNS) -> list:
+    """히스토리를 최근 N턴, max_chars 이내로 잘라냄.
+
+    1턴 = user + assistant 쌍 (연속 user만 있을 수도 있음).
+    오래된 메시지부터 제거. 단일 메시지가 max_chars 초과하면 그대로 반환.
+    """
+    if not history:
+        return []
+
+    # 최대 턴 수 제한 (user 메시지 기준으로 카운트)
+    user_indices = [i for i, m in enumerate(history) if m["role"] == "user"]
+    if len(user_indices) > max_turns:
+        start = user_indices[-max_turns]
+        history = history[start:]
+
+    # 글자 수 제한 — 최소 1개 메시지는 유지
+    total_chars = sum(len(m["content"]) for m in history)
+    while total_chars > max_chars and len(history) > 1:
+        removed = history[0]
+        total_chars -= len(removed["content"])
+        history = history[1:]
+        # user로 시작하도록 보정 (잘린 assistant만 남는 경우 방지)
+        if len(history) > 1 and history[0]["role"] == "assistant":
+            total_chars -= len(history[0]["content"])
+            history = history[1:]
+
+    return history
+
+
+def _get_rag_top_k(history: list) -> int:
+    """히스토리 길이에 따라 RAG top_k를 동적 결정."""
+    if not history:
+        return 3
+    total_chars = sum(len(m["content"]) for m in history)
+    if total_chars > 900:
+        return 1
+    if total_chars > 600:
+        return 2
+    return 3
+
+
 class S2SPipeline:
     """STT Final → LLM (vLLM API) → TTS 파이프라인.
 
@@ -226,12 +271,30 @@ class S2SPipeline:
         self._loaded = True
         logger.info("S2S Pipeline ready (LLM: vLLM API, TTS: StyleTTS2)")
 
+    async def _generate_with_retry(self, messages, truncated, system_prompt, user_msg):
+        """LLM 스트리밍 생성. context 초과 시 히스토리 절반으로 1회 재시도."""
+        try:
+            async for token in self.llm.generate_stream(messages):
+                yield token
+        except ValueError as e:
+            if "rejected" in str(e) and truncated:
+                logger.warning("[S2S] Context overflow, retrying with halved history")
+                half = _truncate_history(truncated, max_chars=MAX_HISTORY_CHARS // 2)
+                retry_messages = [{"role": "system", "content": system_prompt}]
+                retry_messages.extend(half)
+                retry_messages.append({"role": "user", "content": user_msg})
+                async for token in self.llm.generate_stream(retry_messages):
+                    yield token
+            else:
+                raise
+
     async def process(
         self,
         user_text: str,
         system_prompt: str = SYSTEM_PROMPT,
         cancel_event: asyncio.Event = None,
         audio_context: dict = None,
+        history: list = None,
     ) -> AsyncGenerator[dict, None]:
         """STT Final 텍스트를 받아 LLM 응답 + TTS 음성을 스트리밍 생성.
 
@@ -252,6 +315,10 @@ class S2SPipeline:
         def _cancelled():
             return cancel_event is not None and cancel_event.is_set()
 
+        # Truncate history for context management
+        truncated = _truncate_history(history or [])
+        rag_top_k = _get_rag_top_k(truncated)
+
         # Use Knowledge service prompt + RAG search if available
         knowledge_ctx = ""
         if self.knowledge_client and self.knowledge_client.is_loaded():
@@ -261,7 +328,7 @@ class S2SPipeline:
 
             # 1. 실시간 RAG 검색 (문서에서 관련 정보 가져오기)
             try:
-                rag_results = await self.knowledge_client.search(user_text, top_k=3)
+                rag_results = await self.knowledge_client.search(user_text, top_k=rag_top_k)
                 if rag_results:
                     rag_lines = ["[참고 문서]"]
                     for r in rag_results:
@@ -293,6 +360,15 @@ class S2SPipeline:
         parts.append(f"고객: {user_text}")
         user_msg = "\n".join(parts)
 
+        # Assemble messages list with system prompt + truncated history + current user message
+        messages = [{"role": "system", "content": system_prompt}]
+        messages.extend(truncated)
+        messages.append({"role": "user", "content": user_msg})
+
+        logger.info(f"[S2S] History: {len(truncated)} msgs, "
+                    f"{sum(len(m['content']) for m in truncated)} chars, "
+                    f"RAG top_k={rag_top_k}")
+
         # vLLM 서버 상태 확인
         if not await self.llm.check_health():
             yield {"type": "s2s_error", "error": "vLLM 서버에 연결할 수 없습니다 (port 8000)"}
@@ -314,7 +390,7 @@ class S2SPipeline:
 
         loop = asyncio.get_event_loop()
 
-        async for token in self.llm.generate_stream(user_msg, system_prompt):
+        async for token in self._generate_with_retry(messages, truncated, system_prompt, user_msg):
             if _cancelled():
                 logger.info("[S2S] Cancelled during LLM generation (barge-in)")
                 break
