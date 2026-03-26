@@ -55,7 +55,7 @@ SAMPLE_RATE = 16000
 SILENCE_THRESHOLD = 0.008       # RMS 에너지 임계값 (보정 전 기본값)
 SILENCE_DURATION = 1.2          # 무음 N초 이상이면 Final
 MAX_BUFFER_SECONDS = 30         # 최대 버퍼 (강제 Final)
-ATT_CONTEXT_SIZE = [70, 6]      # 멀티 룩어헤드: 560ms per step (더 넓은 문맥)
+ATT_CONTEXT_SIZE = [70, 13]     # 멀티 룩어헤드: ~350ms 청크 (멀티채널 서빙 최적화)
 S2S_ENABLED = cli_args.s2s
 
 # ── FastAPI App ──
@@ -71,6 +71,8 @@ streaming_cfg = None
 turn_detector = None  # Turn Detection (형태소 기반)
 s2s_pipeline = None   # S2S Pipeline (LLM + TTS)
 knowledge_client = None  # Knowledge Service 클라이언트
+dialogue_engine = None   # 시나리오 기반 대화 엔진
+stt_batch = None      # 배치 STT 처리기
 gpu_executor = ThreadPoolExecutor(max_workers=1)
 
 
@@ -112,6 +114,22 @@ class StreamingSession:
         # 대화 히스토리 (멀티턴)
         self.conversation_history = []
 
+        # 시나리오 대화 엔진
+        self.dialogue_mode: str = "freeform"
+        self.scenario_state: dict = {
+            "scenario_id": None,
+            "scenario_version": None,
+            "current_node": None,
+            "slots": {},
+            "variables": {},
+            "history": [],
+            "retry_count": 0,
+            "prosody": None,
+            "stack": [],
+            "awaiting_confirm": False,
+            "_scenario_snapshot": None,
+        }
+
         # 노이즈 보정
         self.noise_samples = []
         self.noise_threshold = SILENCE_THRESHOLD
@@ -127,6 +145,18 @@ class StreamingSession:
         self.cache_last_channel = cache[0]
         self.cache_last_time = cache[1]
         self.cache_last_channel_len = cache[2]
+
+    def get_dialogue_session(self) -> dict:
+        """Return dict compatible with DialogueEngine.process_utterance."""
+        return {
+            "dialogue_mode": self.dialogue_mode,
+            "scenario_state": self.scenario_state,
+        }
+
+    def sync_dialogue_session(self, session_dict: dict):
+        """Write back dialogue state after processing."""
+        self.dialogue_mode = session_dict["dialogue_mode"]
+        self.scenario_state = session_dict["scenario_state"]
 
     def reset_for_new_utterance(self, keep_tail_seconds=0.0):
         """발화 완료 시 상태 리셋. endpoint 이후 도착한 오디오는 보존.
@@ -259,21 +289,237 @@ class StreamingSession:
         return ""
 
 
-def process_session_chunks(session: StreamingSession):
-    """GPU 스레드에서 실행: 가용 청크를 모두 처리하고 텍스트 반환.
+def _batched_stream_step(sessions_and_chunks):
+    """여러 세션의 (session, mel_chunk, chunk_length, step_idx)를 배치로 추론.
+
+    모든 항목이 step > 0이어야 함 (동일 chunk 파라미터).
+    mel 길이가 다르면 0-padding.
+
+    Args:
+        sessions_and_chunks: list of (session, mel_chunk, chunk_length, step_idx)
 
     Returns:
-        (text, blank_step_count) or None if no chunks
+        list of text strings — 각 세션의 디코딩 결과
     """
-    chunks = session.get_available_chunks()
-    if not chunks:
-        return None
+    if not sessions_and_chunks:
+        return []
 
-    text = ""
-    for mel_chunk, chunk_length, step_idx in chunks:
-        text = session.run_streaming_step(mel_chunk, chunk_length, step_idx)
+    drop = streaming_cfg.drop_extra_pre_encoded  # step > 0 공통
 
-    return (text, session.blank_step_count)
+    # 1. Mel padding + stack
+    mel_chunks = [item[1] for item in sessions_and_chunks]  # 각각 (1, n_mels, frames)
+    max_frames = max(m.shape[2] for m in mel_chunks)
+
+    padded_mels = []
+    lengths = []
+    for m in mel_chunks:
+        frames = m.shape[2]
+        if frames < max_frames:
+            m = torch.nn.functional.pad(m, (0, max_frames - frames))
+        padded_mels.append(m)
+        lengths.append(frames)
+
+    batched_mel = torch.cat(padded_mels, dim=0)  # (N, n_mels, max_frames)
+    batched_len = torch.tensor(lengths, device="cuda:0")  # (N,)
+
+    # 2. 캐시 stack (batch dim = dim 1)
+    cache_channel = torch.cat(
+        [s.cache_last_channel for s, _, _, _ in sessions_and_chunks], dim=1
+    )  # (layers, N, C, D)
+    cache_time = torch.cat(
+        [s.cache_last_time for s, _, _, _ in sessions_and_chunks], dim=1
+    )  # (layers, N, D, T)
+    cache_len = torch.cat(
+        [s.cache_last_channel_len for s, _, _, _ in sessions_and_chunks], dim=0
+    )  # (N,)
+
+    # 3. Hypotheses concat
+    hypotheses = []
+    for s, _, _, _ in sessions_and_chunks:
+        if s.previous_hypotheses and len(s.previous_hypotheses) > 0:
+            hypotheses.append(s.previous_hypotheses[0])
+        else:
+            hypotheses.append(None)
+
+    # 4. 배치 추론
+    with torch.no_grad():
+        result = model.conformer_stream_step(
+            processed_signal=batched_mel,
+            processed_signal_length=batched_len,
+            cache_last_channel=cache_channel,
+            cache_last_time=cache_time,
+            cache_last_channel_len=cache_len,
+            keep_all_outputs=False,
+            previous_hypotheses=hypotheses,
+            drop_extra_pre_encoded=drop,
+            return_transcription=True,
+        )
+
+    (greedy_preds, transcriptions,
+     out_cache_channel, out_cache_time, out_cache_len,
+     best_hyp) = result[:6]
+
+    # 5. 결과 split → 각 세션에 복원
+    texts = []
+    for i, (session, _, _, _) in enumerate(sessions_and_chunks):
+        # 캐시 복원 (batch dim slice)
+        session.cache_last_channel = out_cache_channel[:, i:i+1, :, :]
+        session.cache_last_time = out_cache_time[:, i:i+1, :, :]
+        session.cache_last_channel_len = out_cache_len[i:i+1]
+
+        # Hypothesis 복원 + 블랭크 감지
+        if best_hyp and i < len(best_hyp):
+            hyp = best_hyp[i]
+            session.previous_hypotheses = [hyp]
+
+            current_tokens = len(hyp.y_sequence)
+            if current_tokens == session.last_token_count:
+                session.blank_step_count += 1
+            else:
+                session.blank_step_count = 0
+                session.last_token_count = current_tokens
+
+            token_ids = hyp.y_sequence
+            if isinstance(token_ids, torch.Tensor):
+                token_ids = token_ids.cpu().tolist()
+            text = model.tokenizer.ids_to_text(token_ids)
+            texts.append(text)
+        else:
+            texts.append("")
+
+    return texts
+
+
+def _process_batch(sessions: list):
+    """GPU 스레드: 여러 세션의 가용 청크를 배치 추론으로 처리.
+
+    step=0 세션은 개별 처리, step>0 세션은 모델 레벨 배치.
+    라운드 방식: 세션당 1청크씩 배치 → 남은 청크 반복.
+
+    Returns:
+        list of (text, blank_step_count) or None per session
+    """
+    # 각 세션의 가용 청크 수집
+    session_chunks = []  # [(session, chunks_list), ...]
+    for session in sessions:
+        chunks = session.get_available_chunks()
+        session_chunks.append((session, chunks))
+
+    # 세션별 최종 텍스트 추적
+    session_texts = {id(s): "" for s in sessions}
+
+    # 라운드 방식: 매 라운드마다 세션당 1청크씩 처리
+    while True:
+        step0_items = []    # 개별 처리 (step=0)
+        stepN_items = []    # 배치 처리 (step>0)
+        active = False
+
+        for session, chunks in session_chunks:
+            if not chunks:
+                continue
+            active = True
+            mel_chunk, chunk_length, step_idx = chunks.pop(0)
+            if step_idx == 0:
+                step0_items.append((session, mel_chunk, chunk_length, step_idx))
+            else:
+                stepN_items.append((session, mel_chunk, chunk_length, step_idx))
+
+        if not active:
+            break
+
+        # step=0: 개별 batch=1 처리
+        for session, mel_chunk, chunk_length, step_idx in step0_items:
+            text = session.run_streaming_step(mel_chunk, chunk_length, step_idx)
+            session_texts[id(session)] = text
+
+        # step>0: 모델 레벨 배치
+        if stepN_items:
+            if len(stepN_items) > 1:
+                logger.info(f"[Batch] Batched inference: {len(stepN_items)} sessions")
+            texts = _batched_stream_step(stepN_items)
+            for (session, _, _, _), text in zip(stepN_items, texts):
+                session_texts[id(session)] = text
+
+    # 결과 조립
+    results = []
+    for session in sessions:
+        text = session_texts[id(session)]
+        if text:
+            results.append((text, session.blank_step_count))
+        else:
+            results.append(None)
+
+    return results
+
+
+class STTBatchProcessor:
+    """배치 STT 처리기. 여러 세션의 청크를 모아 한 번에 GPU 추론.
+
+    WebSocket 핸들러가 submit()으로 세션을 제출하면,
+    collect_window_ms 동안 추가 요청을 모은 뒤 GPU 스레드에서 일괄 처리.
+    """
+
+    def __init__(self, collect_window_ms=30):
+        self._collect_window = collect_window_ms / 1000
+        self._queue = asyncio.Queue()
+        self._running = False
+
+    async def submit(self, session: StreamingSession):
+        """세션을 배치 처리 큐에 제출. 결과를 기다려 반환.
+
+        Returns:
+            (text, blank_step_count) or None
+        """
+        future = asyncio.get_event_loop().create_future()
+        await self._queue.put((session, future))
+        return await future
+
+    async def run(self):
+        """배치 처리 루프. startup에서 asyncio.create_task()로 시작."""
+        self._running = True
+        loop = asyncio.get_event_loop()
+
+        while self._running:
+            # 첫 요청 대기 (블로킹)
+            first = await self._queue.get()
+            batch = [first]
+
+            # 수집 윈도우 동안 추가 요청 수집
+            deadline = loop.time() + self._collect_window
+            while True:
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    break
+                try:
+                    item = await asyncio.wait_for(
+                        self._queue.get(), timeout=remaining
+                    )
+                    batch.append(item)
+                except asyncio.TimeoutError:
+                    break
+
+            # GPU 스레드에서 일괄 처리
+            sessions = [s for s, _ in batch]
+            futures = [f for _, f in batch]
+
+            if len(sessions) > 1:
+                logger.info(f"[Batch] Processing {len(sessions)} sessions")
+
+            try:
+                results = await loop.run_in_executor(
+                    gpu_executor, _process_batch, sessions
+                )
+                for future, result in zip(futures, results):
+                    if not future.cancelled():
+                        future.set_result(result)
+            except Exception as e:
+                logger.error(f"[Batch] Error: {e}", exc_info=True)
+                for future in futures:
+                    if not future.cancelled():
+                        future.set_result(None)
+
+    def stop(self):
+        self._running = False
 
 
 @app.on_event("startup")
@@ -319,14 +565,20 @@ async def startup():
     warmup_session = StreamingSession()
     warmup_audio = np.random.randn(SAMPLE_RATE).astype(np.float32) * 0.01
     warmup_session.audio_buffer = warmup_audio
-    process_session_chunks(warmup_session)
+    _process_batch([warmup_session])
     del warmup_session
     torch.cuda.empty_cache()
 
     logger.info("Streaming warmup complete. Ready!")
     logger.info(f"GPU memory: {torch.cuda.memory_allocated() / (1024**3):.2f}GB")
 
-    # 6. Turn Detector 초기화
+    # 6. 배치 STT 처리기 시작
+    global stt_batch
+    stt_batch = STTBatchProcessor(collect_window_ms=30)
+    asyncio.create_task(stt_batch.run())
+    logger.info("STT Batch Processor started (30ms collect window)")
+
+    # 7. Turn Detector 초기화
     global turn_detector
     log_dir = Path(__file__).parent / "logs" / "turn_decisions"
     rules_path = Path(__file__).parent / "rules" / "turn_rules.json"
@@ -351,6 +603,34 @@ async def startup():
             logger.info("Knowledge Service connected")
         else:
             logger.info("Knowledge Service not available, using default prompts")
+
+    # 9. Dialogue Engine (시나리오 기반 대화)
+    global dialogue_engine
+    from realtime_demo.dialogue.engine import DialogueEngine
+    from realtime_demo.dialogue.scenario_cache import ScenarioCache
+    from realtime_demo.dialogue.slot_manager import SlotManager
+    from realtime_demo.dialogue.intent_matcher import IntentMatcher
+    from realtime_demo.dialogue.action_runner import ActionRunner
+
+    scenario_cache = ScenarioCache()
+    try:
+        await scenario_cache.refresh()
+    except Exception:
+        logging.warning("Could not load scenarios from Knowledge Service — running in freeform-only mode")
+
+    slot_manager_d = SlotManager(llm_engine=s2s_pipeline.llm if s2s_pipeline else None)
+    intent_matcher = IntentMatcher(embed_fn=None)
+    intent_matcher.set_scenarios(scenario_cache.scenarios)
+    action_runner = ActionRunner(knowledge_client=knowledge_client)
+
+    dialogue_engine = DialogueEngine(
+        scenario_cache=scenario_cache,
+        intent_matcher=intent_matcher,
+        slot_manager=slot_manager_d,
+        llm_engine=s2s_pipeline.llm if s2s_pipeline else None,
+        action_runner=action_runner,
+    )
+    logging.info(f"DialogueEngine initialized with {len(scenario_cache.scenarios)} scenarios")
 
 
 @app.get("/")
@@ -462,6 +742,13 @@ async def knowledge_refresh(body: dict = {}):
         success = await knowledge_client.load_config()
         if success and s2s_pipeline:
             s2s_pipeline.knowledge_client = knowledge_client
+        # Refresh scenarios
+        if dialogue_engine and dialogue_engine.scenario_cache:
+            await dialogue_engine.scenario_cache.refresh()
+            dialogue_engine.intent_matcher.set_scenarios(
+                dialogue_engine.scenario_cache.scenarios
+            )
+            return {"status": "refreshed", "scenarios": len(dialogue_engine.scenario_cache.scenarios)}
         return {"status": "refreshed" if success else "failed"}
     return {"status": "no_client"}
 
@@ -635,9 +922,7 @@ async def websocket_endpoint(websocket: WebSocket):
             # 단, 텍스트가 있을 때만 (발화 중이거나 endpoint 대기 중)
             should_infer = (session.is_speaking or session.last_text) and buffer_seconds >= 0.16
             if should_infer:
-                result = await loop.run_in_executor(
-                    gpu_executor, process_session_chunks, session
-                )
+                result = await stt_batch.submit(session)
 
                 if result is not None:
                     text, blank_count = result
@@ -679,8 +964,8 @@ async def websocket_endpoint(websocket: WebSocket):
                     energy=rms,
                 )
 
-                # 종결어미/감탄사: blank 또는 짧은 무음이면 즉시 endpoint
-                if ending_type in ("final", "interjection"):
+                # 종결어미: blank 또는 짧은 무음이면 즉시 endpoint
+                if ending_type in ("final",):
                     if blank_count >= 1 or silence_seconds >= 0.15:
                         endpoint_reason = f"final_ending({ending_type},eou={eou_score:.2f})"
                 # 그 외: 동적 silence 임계값 기반
@@ -703,9 +988,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 pre_flush_text = session.last_text
                 pad = np.zeros(int(SAMPLE_RATE * 0.32), dtype=np.float32)
                 session.audio_buffer = np.concatenate([session.audio_buffer, pad])
-                flush_result = await loop.run_in_executor(
-                    gpu_executor, process_session_chunks, session
-                )
+                flush_result = await stt_batch.submit(session)
                 if flush_result:
                     flushed_text, _ = flush_result
                     if flushed_text:
@@ -755,7 +1038,9 @@ async def websocket_endpoint(websocket: WebSocket):
                 # 3) 평균 에너지가 너무 낮음 (원거리 대화)
                 korean_chars = len(_re.findall(r'[\uac00-\ud7a3]', session.last_text))
                 text_density = korean_chars / max(buffer_seconds, 0.1)  # 초당 한글 글자 수
-                avg_energy = sum(session.energy_history) / max(len(session.energy_history), 1)
+                # 에너지: 전체 버퍼가 아닌 최근 5초 구간만 사용 (TTS 재생 중 무음 희석 방지)
+                recent_energy = session.energy_history[-20:] if len(session.energy_history) > 20 else session.energy_history  # ~5초 (250ms 청크 × 20)
+                avg_energy = sum(recent_energy) / max(len(recent_energy), 1)
                 noise_threshold = session.noise_threshold
 
                 is_noise = False
@@ -763,9 +1048,6 @@ async def websocket_endpoint(websocket: WebSocket):
                 if buffer_seconds > 8 and text_density < 0.5:
                     is_noise = True
                     noise_reason = f"low_density({text_density:.1f}c/s,{buffer_seconds:.0f}s)"
-                elif avg_energy < noise_threshold * 1.5 and buffer_seconds > 5:
-                    is_noise = True
-                    noise_reason = f"low_energy({avg_energy:.4f}<{noise_threshold*1.5:.4f})"
 
                 if is_noise:
                     logger.info(
@@ -775,6 +1057,28 @@ async def websocket_endpoint(websocket: WebSocket):
                     keep_seconds = min(silence_seconds, 0.5)
                     session.reset_for_new_utterance(keep_tail_seconds=keep_seconds)
                     continue
+
+                # ── Dialogue Engine: try scenario matching first ──
+                if dialogue_engine:
+                    ds = session.get_dialogue_session()
+                    _prosody = _compute_prosody(session, session.last_text, buffer_seconds)
+                    d_result = await dialogue_engine.process_utterance(
+                        ds, session.last_text, _prosody
+                    )
+                    session.sync_dialogue_session(ds)
+
+                    if not d_result.should_use_s2s:
+                        if d_result.response_text:
+                            await websocket.send_json({
+                                "type": "scenario_response",
+                                "text": d_result.response_text,
+                                "mode": d_result.mode,
+                                "action": d_result.action,
+                                "utterance_id": session.utterance_count,
+                            })
+                        session.reset_for_new_utterance(keep_tail_seconds=0.5)
+                        continue
+                # ── End Dialogue Engine ──
 
                 # S2S 파이프라인: Final 텍스트 → LLM → TTS → 음성 응답
                 if S2S_ENABLED and s2s_pipeline and s2s_pipeline.is_loaded():
