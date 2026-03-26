@@ -39,7 +39,7 @@ LLM_TOP_P = 0.9
 
 # ── TTS 설정 ──
 TTS_SAMPLE_RATE = 24000
-TTS_REF_AUDIO = "/home/jonghooy/work/zhisper/tts/voices/styletts2/korean_male_ref.wav"
+TTS_REF_AUDIO = "/home/jonghooy/work/zhisper/tts/voices/styletts2/00003.wav"
 
 # ── 시스템 프롬프트 ──
 SYSTEM_PROMPT = """당신은 친절하고 전문적인 한국어 콜센터 상담원입니다.
@@ -165,8 +165,8 @@ class TTSEngine:
             from tts.engine.styletts2_engine import StyleTTS2Engine
             self.engine = StyleTTS2Engine(
                 device=self.device,
-                config_path=os.path.join(STYLETTS2_PATH, "Configs/config_all_voices.yml"),
-                model_path=os.path.join(STYLETTS2_PATH, "Models/all_voices/epoch_2nd_00006.pth"),
+                config_path=os.path.join(STYLETTS2_PATH, "Models/KB_60h/config_ko_finetune_KB_60h.yml"),
+                model_path=os.path.join(STYLETTS2_PATH, "Models/KB_60h/epoch_2nd_00034.pth"),
                 ref_audio_path=TTS_REF_AUDIO,
             )
             self.engine.load()
@@ -213,9 +213,10 @@ class S2SPipeline:
             ...
     """
 
-    def __init__(self, device: str = "cuda:0"):
+    def __init__(self, device: str = "cuda:0", knowledge_client=None):
         self.llm = LLMEngine()
         self.tts = TTSEngine(device=device)
+        self.knowledge_client = knowledge_client
         self._loaded = False
 
     def load(self):
@@ -253,21 +254,47 @@ class S2SPipeline:
         def _cancelled():
             return cancel_event is not None and cancel_event.is_set()
 
+        # Use Knowledge service prompt if available, else fall back to default
+        if self.knowledge_client and self.knowledge_client.is_loaded():
+            kb_prompt = self.knowledge_client.get_system_prompt()
+            if kb_prompt:
+                system_prompt = kb_prompt
+            # Append FAQ context
+            faq_ctx = self.knowledge_client.get_faq_context(user_text)
+            if faq_ctx:
+                # Prepend FAQ to user message
+                if audio_context:
+                    user_msg = (
+                        f"[audio: energy={audio_context['energy']}, "
+                        f"speech_rate={audio_context['speech_rate']}, "
+                        f"tone_trend={audio_context['energy_trend']}]\n"
+                        f"{faq_ctx}\n"
+                        f"고객: {user_text}"
+                    )
+                else:
+                    user_msg = f"{faq_ctx}\n고객: {user_text}"
+            else:
+                # No FAQ match — build user_msg normally below
+                user_msg = None
+        else:
+            user_msg = None
+
         # vLLM 서버 상태 확인
         if not await self.llm.check_health():
             yield {"type": "s2s_error", "error": "vLLM 서버에 연결할 수 없습니다 (port 8000)"}
             return
 
-        # 프로소디 메타데이터를 사용자 메시지에 포함
-        if audio_context:
-            user_msg = (
-                f"[audio: energy={audio_context['energy']}, "
-                f"speech_rate={audio_context['speech_rate']}, "
-                f"tone_trend={audio_context['energy_trend']}]\n"
-                f"고객: {user_text}"
-            )
-        else:
-            user_msg = f"고객: {user_text}"
+        # 프로소디 메타데이터를 사용자 메시지에 포함 (knowledge client가 설정하지 않은 경우)
+        if user_msg is None:
+            if audio_context:
+                user_msg = (
+                    f"[audio: energy={audio_context['energy']}, "
+                    f"speech_rate={audio_context['speech_rate']}, "
+                    f"tone_trend={audio_context['energy_trend']}]\n"
+                    f"고객: {user_text}"
+                )
+            else:
+                user_msg = f"고객: {user_text}"
 
         yield {"type": "llm_start"}
 

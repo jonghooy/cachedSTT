@@ -38,6 +38,7 @@ import nemo.collections.asr as nemo_asr
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from realtime_demo.turn_detector import TurnDetector
+from realtime_demo.knowledge_client import KnowledgeClient
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -69,6 +70,7 @@ preprocessor = None  # 스트리밍용 전처리기 (dither=0, pad_to=0)
 streaming_cfg = None
 turn_detector = None  # Turn Detection (형태소 기반)
 s2s_pipeline = None   # S2S Pipeline (LLM + TTS)
+knowledge_client = None  # Knowledge Service 클라이언트
 gpu_executor = ThreadPoolExecutor(max_workers=1)
 
 
@@ -336,6 +338,17 @@ async def startup():
         s2s_pipeline.load()
         logger.info("S2S Pipeline ready (Qwen3.5-9B + StyleTTS2)")
 
+    # 8. Knowledge Service 연동 (optional)
+    if S2S_ENABLED:
+        global knowledge_client
+        knowledge_client = KnowledgeClient()
+        loaded = await knowledge_client.load_config()
+        if loaded:
+            s2s_pipeline.knowledge_client = knowledge_client
+            logger.info("Knowledge Service connected")
+        else:
+            logger.info("Knowledge Service not available, using default prompts")
+
 
 @app.get("/")
 async def root():
@@ -437,6 +450,17 @@ async def s2s_status():
         "llm_loaded": s2s_pipeline.llm.is_loaded() if s2s_pipeline else False,
         "tts_loaded": s2s_pipeline.tts.is_loaded() if s2s_pipeline else False,
     }
+
+
+@app.post("/api/knowledge/refresh")
+async def knowledge_refresh(body: dict = {}):
+    """Knowledge Service 변경 시 캐시 갱신."""
+    if knowledge_client:
+        success = await knowledge_client.load_config()
+        if success and s2s_pipeline:
+            s2s_pipeline.knowledge_client = knowledge_client
+        return {"status": "refreshed" if success else "failed"}
+    return {"status": "no_client"}
 
 
 async def _run_s2s(websocket: WebSocket, user_text: str, utterance_id: int,
