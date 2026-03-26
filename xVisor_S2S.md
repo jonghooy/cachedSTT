@@ -113,7 +113,7 @@
 | 모델 | Qwen3.5-9B |
 | 서빙 | vLLM 0.18.0 (별도 프로세스, port 8000) |
 | 정밀도 | BF16 |
-| max_model_len | 1024 |
+| max_model_len | 2048 |
 | Thinking 모드 | 비활성화 (enable_thinking: false) |
 | Prefix caching | 활성화 (시스템 프롬프트 캐싱) |
 | GPU 메모리 | ~24GB (0.75 utilization) |
@@ -336,7 +336,7 @@ frontend/                  # Vue 3 + Vite (port 5173)
 conda activate vllm_serving
 CUDA_VISIBLE_DEVICES=0 vllm serve /mnt/usb/models/Qwen3.5-9B \
     --host 0.0.0.0 --port 8000 \
-    --dtype bfloat16 --max-model-len 1024 \
+    --dtype bfloat16 --max-model-len 2048 \
     --gpu-memory-utilization 0.75 \
     --trust-remote-code --enforce-eager \
     --enable-prefix-caching --max-num-seqs 4 &
@@ -465,7 +465,7 @@ POST brain:3000/api/knowledge/refresh
 
 ### 11.3 상품화
 - [ ] Docker Compose 패키징 (단일 실행)
-- [ ] 대화 히스토리 관리 (멀티턴)
+- [x] 대화 히스토리 관리 (멀티턴) — Brain 세션별, 최근 6턴, 글자 수 기반 truncation
 - [ ] 통화 기록 분석 서비스 (3번째 상품)
 - [ ] Multi-Brain 지원 (하나의 Knowledge → 여러 Brain)
 
