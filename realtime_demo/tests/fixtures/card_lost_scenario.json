@@ -1,0 +1,67 @@
+{
+  "id": "card-lost",
+  "name": "카드 분실 신고",
+  "description": "카드 분실/도난 시 카드 정지 처리",
+  "version": 1,
+  "schema_version": 1,
+  "status": "active",
+  "priority": 10,
+  "created_by": "ai",
+  "triggers": {
+    "examples": [
+      "카드를 잃어버렸어요",
+      "카드 분실 신고 하려고요",
+      "카드가 없어졌는데요",
+      "신용카드를 도난당했어요"
+    ],
+    "description": "고객이 카드 분실/도난을 신고하려는 의도"
+  },
+  "slots": {
+    "card_number": {
+      "type": "string",
+      "required": true,
+      "extract": "regex",
+      "pattern": "\\d{4}[- ]?\\d{4}[- ]?\\d{4}[- ]?\\d{4}",
+      "prompt": "카드번호 16자리를 말씀해주세요."
+    },
+    "loss_type": {
+      "type": "enum",
+      "required": true,
+      "extract": "llm",
+      "values": ["분실", "도난"],
+      "prompt": "분실이신가요, 도난이신가요?"
+    }
+  },
+  "nodes": [
+    {"id": "n1", "type": "speak", "text": "카드 분실 신고 도와드리겠습니다. 카드번호 16자리를 말씀해주세요."},
+    {"id": "n2", "type": "slot_collect", "target_slot": "card_number", "max_retries": 2, "retry_prompt": "카드번호를 다시 말씀해주세요.", "fail_action": "transfer"},
+    {"id": "n3", "type": "slot_collect", "target_slot": "loss_type", "max_retries": 2, "retry_prompt": "분실인지 도난인지 말씀해주세요.", "fail_action": "transfer"},
+    {"id": "n4", "type": "confirm", "template": "카드번호 {{slots.card_number}}, {{slots.loss_type}} 맞으시죠?"},
+    {"id": "n5", "type": "condition", "mode": "rule", "rule": {"field": "slots.loss_type", "op": "eq", "value": "도난"}},
+    {"id": "n6", "type": "speak", "text": "경찰 신고도 함께 진행해주시기 바랍니다."},
+    {"id": "n7", "type": "api_call", "method": "POST", "url": "https://internal-api/card/block", "body": {"card_no": "{{slots.card_number}}", "type": "{{slots.loss_type}}"}, "result_var": "block_result", "timeout_ms": 5000, "on_error": "n_err"},
+    {"id": "n8", "type": "end", "message": "카드 정지 처리 완료되었습니다. 감사합니다.", "disposition": "resolved", "tags": ["card", "lost"]},
+    {"id": "n9", "type": "transfer", "reason": "slot_fail", "message": "상담원에게 연결해드리겠습니다.", "transfer_data": {"slots": "all"}},
+    {"id": "n_err", "type": "speak", "text": "시스템 오류가 발생했습니다. 상담원에게 연결해드리겠습니다."},
+    {"id": "n_err2", "type": "transfer", "reason": "api_error", "message": "상담원에게 연결해드리겠습니다.", "transfer_data": {"slots": "all"}}
+  ],
+  "edges": [
+    {"from": "n1", "to": "n2"},
+    {"from": "n2", "to": "n3"},
+    {"from": "n3", "to": "n4"},
+    {"from": "n4", "to": "n5", "label": "yes"},
+    {"from": "n4", "to": "n2", "label": "no"},
+    {"from": "n5", "to": "n6", "label": "true"},
+    {"from": "n5", "to": "n7", "label": "false"},
+    {"from": "n6", "to": "n7"},
+    {"from": "n7", "to": "n8"},
+    {"from": "n_err", "to": "n_err2"}
+  ],
+  "metadata": {
+    "created_at": "2026-03-27T10:00:00Z",
+    "updated_at": "2026-03-27T10:00:00Z",
+    "test_coverage": 0.0,
+    "execution_count": 0,
+    "avg_completion_rate": null
+  }
+}
