@@ -109,6 +109,9 @@ class StreamingSession:
         # 감정 인식용 에너지 히스토리
         self.energy_history = []
 
+        # 대화 히스토리 (멀티턴)
+        self.conversation_history = []
+
         # 노이즈 보정
         self.noise_samples = []
         self.noise_threshold = SILENCE_THRESHOLD
@@ -464,14 +467,16 @@ async def knowledge_refresh(body: dict = {}):
 
 
 async def _run_s2s(websocket: WebSocket, user_text: str, utterance_id: int,
-                   cancel_event: asyncio.Event = None, audio_context: dict = None):
+                   cancel_event: asyncio.Event = None, audio_context: dict = None,
+                   session: StreamingSession = None, history: list = None):
     """S2S 파이프라인 비동기 실행: LLM 스트리밍 → 문장 단위 TTS → WebSocket 전송."""
     try:
         ctx_str = f"energy={audio_context['energy']},rate={audio_context['speech_rate']},trend={audio_context['energy_trend']}" if audio_context else "none"
         logger.info(f"[S2S #{utterance_id}] Starting: {user_text} [audio: {ctx_str}]")
 
         async for event in s2s_pipeline.process(user_text, cancel_event=cancel_event,
-                                                 audio_context=audio_context):
+                                                 audio_context=audio_context,
+                                                 history=history):
             etype = event["type"]
 
             if etype == "llm_start":
@@ -513,6 +518,12 @@ async def _run_s2s(websocket: WebSocket, user_text: str, utterance_id: int,
                     "full_text": event["full_text"],
                     "utterance_id": utterance_id,
                 })
+                # 대화 히스토리에 assistant 응답 추가 (barge-in 취소 시 제외)
+                if session is not None and not (cancel_event and cancel_event.is_set()):
+                    session.conversation_history.append({
+                        "role": "assistant",
+                        "content": event["full_text"],
+                    })
 
             elif etype == "s2s_done":
                 latency = event["latency"]
@@ -571,6 +582,12 @@ async def websocket_endpoint(websocket: WebSocket):
                         s2s_cancel_event.set()
                         logger.info("[Barge-in] S2S cancelled by user")
                     await websocket.send_json({"type": "s2s_cancelled"})
+                    continue
+                # 대화 히스토리 리셋
+                if msg.get("type") == "reset_history":
+                    session.conversation_history = []
+                    await websocket.send_json({"type": "history_reset"})
+                    logger.info("[History] Reset by user")
                     continue
 
             # 바이너리 메시지 (오디오)
@@ -732,8 +749,44 @@ async def websocket_endpoint(websocket: WebSocket):
                     endpoint_reason=endpoint_reason,
                 )
 
+                # ── 노이즈 필터: 배경 소음/원거리 대화 걸러내기 ──
+                # 1) 텍스트 너무 짧음 (한글 4자 미만 = 의미 없는 조각)
+                # 2) 발화 대비 텍스트 밀도 너무 낮음 (긴 버퍼에 짧은 텍스트 = 노이즈)
+                # 3) 평균 에너지가 너무 낮음 (원거리 대화)
+                korean_chars = len(_re.findall(r'[\uac00-\ud7a3]', session.last_text))
+                text_density = korean_chars / max(buffer_seconds, 0.1)  # 초당 한글 글자 수
+                avg_energy = sum(session.energy_history) / max(len(session.energy_history), 1)
+                noise_threshold = session.noise_threshold
+
+                is_noise = False
+                noise_reason = ""
+                if buffer_seconds > 8 and text_density < 0.5:
+                    is_noise = True
+                    noise_reason = f"low_density({text_density:.1f}c/s,{buffer_seconds:.0f}s)"
+                elif avg_energy < noise_threshold * 1.5 and buffer_seconds > 5:
+                    is_noise = True
+                    noise_reason = f"low_energy({avg_energy:.4f}<{noise_threshold*1.5:.4f})"
+
+                if is_noise:
+                    logger.info(
+                        f"[Noise Filter] Skipped: \"{session.last_text}\" "
+                        f"reason={noise_reason} duration={buffer_seconds:.1f}s"
+                    )
+                    keep_seconds = min(silence_seconds, 0.5)
+                    session.reset_for_new_utterance(keep_tail_seconds=keep_seconds)
+                    continue
+
                 # S2S 파이프라인: Final 텍스트 → LLM → TTS → 음성 응답
                 if S2S_ENABLED and s2s_pipeline and s2s_pipeline.is_loaded():
+                    # 히스토리 스냅샷 (현재 user 발화는 process()에서 current로 들어가므로 제외)
+                    history_snapshot = list(session.conversation_history)
+
+                    # 대화 히스토리에 user 발화 추가
+                    session.conversation_history.append({
+                        "role": "user",
+                        "content": session.last_text,
+                    })
+
                     # 이전 S2S 실행 중이면 취소
                     if s2s_cancel_event is not None:
                         s2s_cancel_event.set()
@@ -744,7 +797,8 @@ async def websocket_endpoint(websocket: WebSocket):
                     s2s_task = asyncio.create_task(
                         _run_s2s(websocket, final_text_for_s2s,
                                  session.utterance_count, s2s_cancel_event,
-                                 audio_context=prosody)
+                                 audio_context=prosody,
+                                 session=session, history=history_snapshot)
                     )
 
                 # 무음 구간 중 이미 도착한 후속 오디오 보존
