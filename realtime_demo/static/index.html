@@ -76,6 +76,17 @@
             transition: all 0.2s;
         }
         #btn-restart:hover { border-color: #f59e0b; color: #f59e0b; }
+        #btn-reset-history {
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            border: 1px solid #334155;
+            background: #1e293b;
+            color: #94a3b8;
+            font-size: 0.85rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        #btn-reset-history:hover { border-color: #38bdf8; color: #38bdf8; }
         .control-info {
             flex: 1;
         }
@@ -416,6 +427,7 @@
                 </div>
             </div>
             <button id="btn-restart" onclick="restartSession()">RESTART</button>
+            <button id="btn-reset-history" onclick="resetHistory()">대화 리셋</button>
         </div>
 
         <div class="section-label">현재 발화 (Partial)</div>
@@ -671,6 +683,12 @@
         if (s2sBox) s2sBox.innerHTML = '<span class="placeholder">S2S 활성화됨 — 음성 인식 후 AI가 응답합니다</span>';
         const emBadge = document.getElementById('s2s-emotion-badge');
         if (emBadge) emBadge.style.display = 'none';
+    }
+
+    function resetHistory() {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({type: 'reset_history'}));
+        }
     }
 
     async function toggleRecording() {
@@ -990,6 +1008,15 @@
                     '<span style="color:#ef4444;">S2S 오류: ' + msg.error + '</span>';
                 document.getElementById('s2s-badge').className = 's2s-badge done';
                 document.getElementById('s2s-badge').textContent = '오류';
+                break;
+
+            case 'history_reset':
+                const histStatus = document.getElementById('status');
+                histStatus.textContent = '대화 히스토리 초기화됨';
+                setTimeout(() => {
+                    if (isRecording) histStatus.textContent = '녹음 중...';
+                    else histStatus.textContent = '마이크 버튼을 눌러 시작';
+                }, 2000);
                 break;
         }
     }
