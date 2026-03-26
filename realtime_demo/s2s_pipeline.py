@@ -230,7 +230,11 @@ def _truncate_history(history: list, max_chars: int = MAX_HISTORY_CHARS, max_tur
             total_chars -= len(history[0]["content"])
             history = history[1:]
 
-    return history
+    # 최종 보정: assistant로 시작하면 제거 (orphaned assistant 방지)
+    if history and history[0]["role"] == "assistant":
+        history = history[1:]
+
+    return history if history else []
 
 
 def _get_rag_top_k(history: list) -> int:
@@ -277,7 +281,8 @@ class S2SPipeline:
             async for token in self.llm.generate_stream(messages):
                 yield token
         except ValueError as e:
-            if "rejected" in str(e) and truncated:
+            err_msg = str(e).lower()
+            if ("context" in err_msg or "length" in err_msg) and truncated:
                 logger.warning("[S2S] Context overflow, retrying with halved history")
                 half = _truncate_history(truncated, max_chars=MAX_HISTORY_CHARS // 2)
                 retry_messages = [{"role": "system", "content": system_prompt}]
