@@ -7,3 +7,8 @@ __pycache__/
 *.log
 .DS_Store
 nohup.out
+
+# Runtime logs & temp
+realtime_demo/logs/
+scratchpad/
+train_error.md

@@ -1,0 +1,49 @@
+{
+  "rules": [
+    {
+      "suffix": "잖아요",
+      "ending": "final",
+      "note": "잖아요 → 종결"
+    },
+    {
+      "suffix": "던데요",
+      "ending": "final",
+      "note": "했던데요"
+    },
+    {
+      "suffix": "런데요",
+      "ending": "final",
+      "note": "그런데요"
+    },
+    {
+      "suffix": "있는지",
+      "ending": "incomplete",
+      "note": ""
+    },
+    {
+      "suffix": "데요",
+      "ending": "final",
+      "note": "연결어미+요 → 종결 (있는데요, 왔는데요)"
+    },
+    {
+      "suffix": "든요",
+      "ending": "final",
+      "note": "거든요, 하든요"
+    },
+    {
+      "suffix": "란요",
+      "ending": "final",
+      "note": "다란요, 거란요"
+    },
+    {
+      "suffix": "래요",
+      "ending": "final",
+      "note": "그래요, 하래요"
+    },
+    {
+      "suffix": "네요",
+      "ending": "final",
+      "note": "테스트 규칙"
+    }
+  ]
+}
