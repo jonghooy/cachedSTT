@@ -445,6 +445,7 @@
             <div class="s2s-status">
                 <span id="s2s-badge" class="s2s-badge done">대기</span>
                 <span id="s2s-emotion-badge" class="emotion-badge neutral" style="display:none;"></span>
+                <span>Turn: <span class="latency" id="s2s-turn">--</span></span>
                 <span>TTFT: <span class="latency" id="s2s-ttft">--</span></span>
                 <span>First Audio: <span class="latency" id="s2s-first-audio">--</span></span>
                 <span>Total: <span class="latency" id="s2s-total">--</span></span>
@@ -509,6 +510,9 @@
     let ttsAudioContext = null;       // TTS 재생용 AudioContext
     let ttsCurrentSource = null;      // 현재 재생 중인 AudioBufferSource
     let s2sActive = false;            // S2S 응답 진행 중 플래그
+    let finalTimestamp = 0;           // Final 발생 시각 (체감 지연 계산용)
+    let lastPartialTimestamp = 0;     // 마지막 partial 텍스트 시각 (Turn Detection 시간 계산용)
+    let firstAudioTimestamp = 0;      // 첫 TTS 오디오 도착 시각
 
     // AudioWorklet 프로세서 코드 (인라인)
     const processorCode = `
@@ -616,7 +620,11 @@
         audio.play();
     }
 
-    function restartSession() {
+    async function restartSession() {
+        // 녹음 중이면 중지
+        if (isRecording) stopRecording();
+        stopTTSPlayback();
+
         // 재생 중지
         if (currentlyPlaying) {
             currentlyPlaying.pause();
@@ -630,6 +638,23 @@
         savedAudios = [];
         currentUtteranceChunks = [];
 
+        // Knowledge 프롬프트 다시 로딩
+        const status = document.getElementById('status');
+        status.textContent = 'Knowledge 프롬프트 갱신 중...';
+        status.className = 'status-connecting';
+        try {
+            const res = await fetch('/api/knowledge/refresh', { method: 'POST', headers: {'Content-Type':'application/json'}, body: '{}' });
+            const data = await res.json();
+            if (data.status === 'refreshed') {
+                status.textContent = '프롬프트 갱신 완료. 마이크를 눌러 시작';
+            } else {
+                status.textContent = '프롬프트 갱신 실패 (Knowledge 미연결). 기본 프롬프트 사용';
+            }
+        } catch(e) {
+            status.textContent = 'Knowledge 연결 실패. 기본 프롬프트 사용';
+        }
+        status.className = 'status-ready';
+
         // UI 초기화
         utteranceCount = 0;
         totalDuration = 0;
@@ -641,6 +666,11 @@
             '<span class="placeholder">음성을 입력하면 여기에 실시간으로 표시됩니다...</span>';
         document.getElementById('partial-box').classList.remove('has-text');
         resetTurnPanel();
+        // S2S 패널 초기화
+        const s2sBox = document.getElementById('s2s-response-box');
+        if (s2sBox) s2sBox.innerHTML = '<span class="placeholder">S2S 활성화됨 — 음성 인식 후 AI가 응답합니다</span>';
+        const emBadge = document.getElementById('s2s-emotion-badge');
+        if (emBadge) emBadge.style.display = 'none';
     }
 
     async function toggleRecording() {
@@ -688,18 +718,8 @@
                     const pcmCopy = new Int16Array(new Int16Array(e.data));
                     currentUtteranceChunks.push(pcmCopy);
 
-                    // Client-side barge-in: TTS 재생 중 사용자 음성 감지
-                    if (ttsPlaying) {
-                        let sumSq = 0;
-                        for (let i = 0; i < pcmCopy.length; i++) {
-                            const s = pcmCopy[i] / 32768.0;
-                            sumSq += s * s;
-                        }
-                        const rms = Math.sqrt(sumSq / pcmCopy.length);
-                        if (rms > 0.03) {
-                            triggerBargeIn();
-                        }
-                    }
+                    // Barge-in은 STT partial 텍스트 기반으로 처리 (RMS 에너지가 아님)
+                    // → handleMessage의 'partial' case에서 triggerBargeIn() 호출
 
                     if (ws && ws.readyState === WebSocket.OPEN) {
                         ws.send(e.data);
@@ -791,13 +811,11 @@
         switch (msg.type) {
             case 'level':
                 document.getElementById('level-bar').style.width = (msg.value * 100) + '%';
-                // Barge-in (서버 level 백업): TTS 재생 중 사용자 음성 감지
-                if (ttsPlaying && msg.value > 0.08) {
-                    triggerBargeIn();
-                }
+                // Barge-in은 STT partial 텍스트 기반으로만 처리
                 break;
 
             case 'partial':
+                lastPartialTimestamp = performance.now();
                 const partialBox = document.getElementById('partial-box');
                 partialBox.classList.add('has-text');
                 partialBox.innerHTML = msg.text + '<span class="cursor"></span>';
@@ -805,9 +823,18 @@
                 if (msg.turn) {
                     updateTurnPanel(msg.turn.ending, msg.turn.eou, msg.turn.threshold);
                 }
+                // Barge-in: TTS 재생 중 실제 음성 인식(텍스트)이 발생하면 끼어들기
+                if (ttsPlaying && msg.text && msg.text.length >= 2) {
+                    triggerBargeIn();
+                }
                 break;
 
             case 'final':
+                finalTimestamp = performance.now();
+                firstAudioTimestamp = 0;  // 다음 발화를 위해 리셋
+                // Turn Detection 소요시간: 마지막 partial → Final
+                const turnMs = lastPartialTimestamp ? Math.round(finalTimestamp - lastPartialTimestamp) : null;
+                document.getElementById('s2s-turn').textContent = turnMs !== null ? turnMs + 'ms' : '--';
                 // 현재 발화 오디오를 WAV로 저장 (발화 부분만 추출)
                 const audioIndex = savedAudios.length;
                 if (currentUtteranceChunks.length > 0 && msg.duration > 0) {
@@ -917,6 +944,12 @@
             case 's2s_tts_audio':
                 document.getElementById('s2s-badge').className = 's2s-badge speaking';
                 document.getElementById('s2s-badge').textContent = 'TTS 재생 중';
+                // 첫 TTS 오디오 도착 시각 기록
+                if (!firstAudioTimestamp && finalTimestamp) {
+                    firstAudioTimestamp = performance.now();
+                    document.getElementById('s2s-first-audio').textContent =
+                        Math.round(firstAudioTimestamp - finalTimestamp) + 'ms';
+                }
                 // PCM int16 base64 → 재생 큐에 추가
                 enqueueTTSAudio(msg.audio_b64, msg.sample_rate);
                 break;
@@ -938,10 +971,11 @@
                 if (msg.latency) {
                     document.getElementById('s2s-ttft').textContent =
                         msg.latency.ttft_ms ? msg.latency.ttft_ms + 'ms' : '--';
-                    document.getElementById('s2s-first-audio').textContent =
-                        msg.latency.first_audio_ms ? msg.latency.first_audio_ms + 'ms' : '--';
+                    // First Audio는 s2s_tts_audio에서 이미 기록됨
+                    // Total = Final → s2s_done (전체 체감)
+                    const totalPerceivedMs = finalTimestamp ? Math.round(performance.now() - finalTimestamp) : null;
                     document.getElementById('s2s-total').textContent =
-                        msg.latency.total_ms ? msg.latency.total_ms + 'ms' : '--';
+                        totalPerceivedMs ? totalPerceivedMs + 'ms' : (msg.latency.total_ms ? msg.latency.total_ms + 'ms' : '--');
                 }
                 break;
 

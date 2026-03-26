@@ -614,7 +614,10 @@ async def websocket_endpoint(websocket: WebSocket):
             buffer_seconds = len(session.audio_buffer) / SAMPLE_RATE
 
             # 스트리밍 추론: GPU 스레드에서 가용 청크 처리
-            if session.is_speaking and buffer_seconds >= 0.16:
+            # 무음 구간에서도 추론 계속 (blank_count 업데이트를 위해)
+            # 단, 텍스트가 있을 때만 (발화 중이거나 endpoint 대기 중)
+            should_infer = (session.is_speaking or session.last_text) and buffer_seconds >= 0.16
+            if should_infer:
                 result = await loop.run_in_executor(
                     gpu_executor, process_session_chunks, session
                 )
@@ -650,7 +653,7 @@ async def websocket_endpoint(websocket: WebSocket):
             eou_score = 0.0
 
             endpoint_reason = ""
-            if session.is_speaking and buffer_seconds >= 0.5 and session.last_text:
+            if (session.is_speaking or session.last_text) and buffer_seconds >= 0.3 and session.last_text:
                 ending_type = turn_detector.classify_ending(session.last_text)
                 eou_score = turn_detector.compute_eou(
                     text=session.last_text,
@@ -659,15 +662,16 @@ async def websocket_endpoint(websocket: WebSocket):
                     energy=rms,
                 )
 
-                # 종결어미/감탄사: 모델이 토큰 출력을 멈추면 즉시 endpoint
-                if ending_type in ("final", "interjection") and blank_count >= 1:
-                    endpoint_reason = f"final_ending({ending_type},eou={eou_score:.2f})"
+                # 종결어미/감탄사: blank 또는 짧은 무음이면 즉시 endpoint
+                if ending_type in ("final", "interjection"):
+                    if blank_count >= 1 or silence_seconds >= 0.15:
+                        endpoint_reason = f"final_ending({ending_type},eou={eou_score:.2f})"
                 # 그 외: 동적 silence 임계값 기반
                 elif silence_seconds > 0:
                     dynamic_threshold = turn_detector.get_silence_threshold(eou_score)
-                    if silence_seconds >= dynamic_threshold and blank_count >= 2:
+                    if silence_seconds >= dynamic_threshold and (blank_count >= 2 or silence_seconds >= dynamic_threshold + 0.3):
                         endpoint_reason = f"turn(eou={eou_score:.2f},th={dynamic_threshold})"
-                    elif silence_seconds >= 3.0:
+                    elif silence_seconds >= 2.0:
                         endpoint_reason = "timeout"         # 절대 안전망
 
                 if not endpoint_reason and buffer_seconds >= MAX_BUFFER_SECONDS:

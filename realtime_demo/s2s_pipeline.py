@@ -33,7 +33,7 @@ STYLETTS2_PATH = "/home/jonghooy/work/zhisper/styletts2_korean"
 # ── vLLM API 설정 ──
 VLLM_BASE_URL = "http://localhost:8000/v1"
 VLLM_MODEL = "/mnt/usb/models/Qwen3.5-9B"
-LLM_MAX_TOKENS = 256
+LLM_MAX_TOKENS = 80
 LLM_TEMPERATURE = 0.7
 LLM_TOP_P = 0.9
 
@@ -43,20 +43,18 @@ TTS_REF_AUDIO = "/home/jonghooy/work/zhisper/tts/voices/styletts2/00003.wav"
 
 # ── 시스템 프롬프트 ──
 SYSTEM_PROMPT = """당신은 친절하고 전문적인 한국어 콜센터 상담원입니다.
-고객의 발화 내용과 음성 특징(에너지, 말 속도, 톤 변화)을 종합하여 감정을 파악하고, 감정에 맞게 응대하세요.
 
-규칙:
-1. 반드시 첫 줄에 [EMOTION:anger|anxiety|neutral|satisfaction|joy] 태그를 출력하세요.
-2. 태그 다음 줄부터 답변을 작성하세요.
-3. 답변은 1-2문장으로 짧게 유지하세요. TTS로 읽히므로 자연스러운 구어체를 사용하세요.
-4. 마크다운이나 특수 기호를 사용하지 마세요.
+절대 규칙 (반드시 지켜야 함):
+1. 첫 줄에 [EMOTION:anger|anxiety|neutral|satisfaction|joy] 태그를 출력하세요.
+2. 답변은 반드시 1문장, 최대 2문장으로 제한하세요. 절대 3문장 이상 금지.
+3. TTS로 읽히므로 자연스러운 구어체를 사용하세요.
+4. 마크다운, 별표, 괄호 등 특수 기호를 사용하지 마세요.
 
-감정별 응대 지침:
-- anger: 진심으로 사과하고, 즉각적인 해결 의지를 표현하세요.
-- anxiety: 안심시키고, 차근차근 안내하세요.
-- neutral: 친절하고 명확하게 답변하세요.
-- satisfaction: 감사를 표현하고 추가 도움을 제안하세요.
-- joy: 함께 기뻐하며 밝게 응대하세요."""
+감정별 응대:
+- anger: 사과 + 즉각 해결
+- anxiety: 안심 + 안내
+- neutral: 친절하게 답변
+- satisfaction/joy: 감사 + 밝게 응대"""
 
 import re as _re_mod
 EMOTION_TAG_PATTERN = _re_mod.compile(r'\[EMOTION:(anger|anxiety|neutral|satisfaction|joy)\]')
@@ -254,47 +252,51 @@ class S2SPipeline:
         def _cancelled():
             return cancel_event is not None and cancel_event.is_set()
 
-        # Use Knowledge service prompt if available, else fall back to default
+        # Use Knowledge service prompt + RAG search if available
+        knowledge_ctx = ""
         if self.knowledge_client and self.knowledge_client.is_loaded():
             kb_prompt = self.knowledge_client.get_system_prompt()
             if kb_prompt:
                 system_prompt = kb_prompt
-            # Append FAQ context
+
+            # 1. 실시간 RAG 검색 (문서에서 관련 정보 가져오기)
+            try:
+                rag_results = await self.knowledge_client.search(user_text, top_k=3)
+                if rag_results:
+                    rag_lines = ["[참고 문서]"]
+                    for r in rag_results:
+                        text = r.get("text", "").replace("[문서:", "").split("]", 1)[-1].strip()
+                        section = r.get("section", "")
+                        if section:
+                            rag_lines.append(f"[{section}] {text[:300]}")
+                        else:
+                            rag_lines.append(text[:300])
+                    knowledge_ctx = "\n".join(rag_lines)
+            except Exception as e:
+                logger.warning(f"[S2S] RAG search failed: {e}")
+
+            # 2. FAQ context (캐시된 FAQ에서 매칭)
             faq_ctx = self.knowledge_client.get_faq_context(user_text)
             if faq_ctx:
-                # Prepend FAQ to user message
-                if audio_context:
-                    user_msg = (
-                        f"[audio: energy={audio_context['energy']}, "
-                        f"speech_rate={audio_context['speech_rate']}, "
-                        f"tone_trend={audio_context['energy_trend']}]\n"
-                        f"{faq_ctx}\n"
-                        f"고객: {user_text}"
-                    )
-                else:
-                    user_msg = f"{faq_ctx}\n고객: {user_text}"
-            else:
-                # No FAQ match — build user_msg normally below
-                user_msg = None
-        else:
-            user_msg = None
+                knowledge_ctx = f"{knowledge_ctx}\n{faq_ctx}" if knowledge_ctx else faq_ctx
+
+        # Build user message with knowledge context + audio context
+        parts = []
+        if audio_context:
+            parts.append(
+                f"[audio: energy={audio_context['energy']}, "
+                f"speech_rate={audio_context['speech_rate']}, "
+                f"tone_trend={audio_context['energy_trend']}]"
+            )
+        if knowledge_ctx:
+            parts.append(knowledge_ctx)
+        parts.append(f"고객: {user_text}")
+        user_msg = "\n".join(parts)
 
         # vLLM 서버 상태 확인
         if not await self.llm.check_health():
             yield {"type": "s2s_error", "error": "vLLM 서버에 연결할 수 없습니다 (port 8000)"}
             return
-
-        # 프로소디 메타데이터를 사용자 메시지에 포함 (knowledge client가 설정하지 않은 경우)
-        if user_msg is None:
-            if audio_context:
-                user_msg = (
-                    f"[audio: energy={audio_context['energy']}, "
-                    f"speech_rate={audio_context['speech_rate']}, "
-                    f"tone_trend={audio_context['energy_trend']}]\n"
-                    f"고객: {user_text}"
-                )
-            else:
-                user_msg = f"고객: {user_text}"
 
         yield {"type": "llm_start"}
 
@@ -335,7 +337,8 @@ class S2SPipeline:
                     yield {"type": "s2s_emotion", "emotion": detected_emotion}
                     continue
                 # 아직 태그가 완성되지 않았으면 TTS에 보내지 않음
-                if len(full_text) < 40:
+                # [EMOTION:satisfaction] = 24자가 최대
+                if len(full_text) < 25:
                     continue
 
             chunk_buffer += token
