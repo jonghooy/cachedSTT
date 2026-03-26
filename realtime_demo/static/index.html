@@ -65,6 +65,17 @@
             0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
             50% { box-shadow: 0 0 0 12px rgba(239, 68, 68, 0); }
         }
+        #btn-restart {
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            border: 1px solid #334155;
+            background: #1e293b;
+            color: #94a3b8;
+            font-size: 0.85rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        #btn-restart:hover { border-color: #f59e0b; color: #f59e0b; }
         .control-info {
             flex: 1;
         }
@@ -148,18 +159,237 @@
         .utterance {
             padding: 0.3rem 0;
             border-bottom: 1px solid #1e293b;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
         }
         .utterance:last-child { border-bottom: none; }
-        .utterance .text { color: #e2e8f0; }
+        .utterance .text { color: #e2e8f0; flex: 1; }
         .utterance .meta {
             font-size: 0.7rem;
             color: #475569;
-            margin-left: 0.5rem;
+            white-space: nowrap;
+        }
+        .utterance .btn-play {
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            border: 1px solid #334155;
+            background: #0f172a;
+            color: #94a3b8;
+            font-size: 0.75rem;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            transition: all 0.2s;
+        }
+        .utterance .btn-play:hover { border-color: #3b82f6; color: #3b82f6; }
+        .utterance .btn-play.playing {
+            border-color: #22c55e;
+            color: #22c55e;
         }
         #results-box .placeholder {
             color: #475569;
             font-style: italic;
         }
+
+        /* Turn Detection 패널 */
+        #turn-panel {
+            background: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 8px;
+            padding: 0.6rem 1rem;
+            margin-top: 0.5rem;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            font-size: 0.8rem;
+        }
+        .turn-label {
+            color: #64748b;
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .turn-badge {
+            display: inline-block;
+            padding: 0.15rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+        .turn-badge.final     { background: #14532d; color: #4ade80; }
+        .turn-badge.interjection { background: #14532d; color: #86efac; }
+        .turn-badge.connective { background: #7c2d12; color: #fdba74; }
+        .turn-badge.incomplete { background: #7c2d12; color: #fca5a5; }
+        .turn-badge.transformative { background: #78350f; color: #fde68a; }
+        .turn-badge.unknown   { background: #334155; color: #94a3b8; }
+        .turn-badge.none      { background: #1e293b; color: #475569; }
+        .eou-bar-container {
+            flex: 1;
+            height: 8px;
+            background: #0f172a;
+            border-radius: 4px;
+            overflow: hidden;
+            min-width: 80px;
+        }
+        #eou-bar {
+            height: 100%;
+            width: 0%;
+            border-radius: 4px;
+            transition: width 0.15s, background 0.15s;
+            background: #334155;
+        }
+        .eou-value { color: #94a3b8; font-weight: 600; min-width: 40px; text-align: right; }
+        .threshold-value { color: #64748b; min-width: 55px; }
+
+        /* Final 결과의 endpoint 태그 */
+        .utterance .ep-tag {
+            font-size: 0.6rem;
+            padding: 0.1rem 0.35rem;
+            border-radius: 3px;
+            white-space: nowrap;
+        }
+        .ep-tag.fast   { background: #14532d; color: #4ade80; }
+        .ep-tag.normal { background: #1e3a5f; color: #93c5fd; }
+        .ep-tag.slow   { background: #78350f; color: #fde68a; }
+
+        /* 규칙 관리 패널 */
+        .rules-section { margin-top: 2rem; }
+        .rules-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            cursor: pointer;
+            user-select: none;
+        }
+        .rules-header:hover .section-label { color: #94a3b8; }
+        .rules-toggle { color: #64748b; font-size: 0.8rem; }
+        #rules-panel {
+            display: none;
+            background: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 8px;
+            padding: 1rem;
+            margin-top: 0.5rem;
+        }
+        #rules-panel.open { display: block; }
+        .rule-add-form {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+            flex-wrap: wrap;
+        }
+        .rule-add-form input, .rule-add-form select {
+            background: #0f172a;
+            border: 1px solid #334155;
+            border-radius: 4px;
+            color: #e2e8f0;
+            padding: 0.4rem 0.6rem;
+            font-size: 0.85rem;
+        }
+        .rule-add-form input:focus, .rule-add-form select:focus {
+            outline: none;
+            border-color: #3b82f6;
+        }
+        .rule-add-form input::placeholder { color: #475569; }
+        .btn-add, .btn-del, .btn-test {
+            padding: 0.4rem 0.8rem;
+            border-radius: 4px;
+            border: 1px solid #334155;
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .btn-add { background: #14532d; color: #4ade80; border-color: #166534; }
+        .btn-add:hover { background: #166534; }
+        .btn-del { background: #7f1d1d; color: #fca5a5; border-color: #991b1b; padding: 0.2rem 0.5rem; font-size: 0.7rem; }
+        .btn-del:hover { background: #991b1b; }
+        .btn-test { background: #1e3a5f; color: #93c5fd; border-color: #1e40af; }
+        .btn-test:hover { background: #1e40af; }
+        .rules-list { max-height: 250px; overflow-y: auto; }
+        .rule-row {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.3rem 0;
+            border-bottom: 1px solid #0f172a;
+            font-size: 0.85rem;
+        }
+        .rule-row:last-child { border-bottom: none; }
+        .rule-suffix { color: #93c5fd; font-weight: 600; min-width: 80px; }
+        .rule-ending { min-width: 50px; }
+        .rule-note { color: #64748b; flex: 1; font-size: 0.75rem; }
+        .test-area {
+            display: flex;
+            gap: 0.5rem;
+            margin-top: 0.8rem;
+            padding-top: 0.8rem;
+            border-top: 1px solid #334155;
+        }
+        .test-area input { flex: 1; }
+        #test-result { color: #94a3b8; font-size: 0.8rem; margin-top: 0.3rem; }
+
+        /* S2S 응답 영역 */
+        #s2s-panel {
+            display: none;
+            margin-top: 1rem;
+        }
+        #s2s-panel.active { display: block; }
+        #s2s-response-box {
+            background: #1a2332;
+            border: 1px solid #1e40af;
+            border-radius: 8px;
+            padding: 1rem 1.2rem;
+            min-height: 60px;
+            font-size: 1rem;
+            line-height: 1.6;
+            color: #a78bfa;
+        }
+        #s2s-response-box .cursor {
+            display: inline-block;
+            width: 2px;
+            height: 1em;
+            background: #7c3aed;
+            margin-left: 2px;
+            vertical-align: text-bottom;
+            animation: blink 1s infinite;
+        }
+        .s2s-status {
+            display: flex;
+            align-items: center;
+            gap: 0.8rem;
+            margin-top: 0.4rem;
+            font-size: 0.75rem;
+            color: #64748b;
+        }
+        .s2s-status .latency { color: #a78bfa; font-weight: 600; }
+        .s2s-badge {
+            display: inline-block;
+            padding: 0.1rem 0.4rem;
+            border-radius: 3px;
+            font-size: 0.7rem;
+            font-weight: 600;
+        }
+        .s2s-badge.thinking { background: #312e81; color: #a78bfa; }
+        .s2s-badge.speaking { background: #14532d; color: #4ade80; }
+        .s2s-badge.done     { background: #1e293b; color: #94a3b8; }
+
+        .emotion-badge {
+            display: inline-block;
+            padding: 0.15rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            margin-left: 0.5rem;
+        }
+        .emotion-badge.anger        { background: #7f1d1d; color: #fca5a5; }
+        .emotion-badge.anxiety      { background: #78350f; color: #fde68a; }
+        .emotion-badge.neutral      { background: #1e293b; color: #94a3b8; }
+        .emotion-badge.satisfaction { background: #14532d; color: #86efac; }
+        .emotion-badge.joy          { background: #1e3a5f; color: #93c5fd; }
 
         /* 통계 */
         .stats {
@@ -175,7 +405,7 @@
 <body>
     <div class="container">
         <h1>실시간 한국어 음성인식</h1>
-        <p class="subtitle">Nemotron Speech ASR 0.6B Transfer Learning (WER 16.3%)</p>
+        <p class="subtitle">Nemotron Speech ASR 0.6B Transfer Learning (WER 16.3%) <span id="s2s-indicator"></span></p>
 
         <div class="controls">
             <button id="btn-mic" onclick="toggleRecording()">&#x1F3A4;</button>
@@ -185,11 +415,20 @@
                     <div id="level-bar"></div>
                 </div>
             </div>
+            <button id="btn-restart" onclick="restartSession()">RESTART</button>
         </div>
 
         <div class="section-label">현재 발화 (Partial)</div>
         <div id="partial-box">
             <span class="placeholder">음성을 입력하면 여기에 실시간으로 표시됩니다...</span>
+        </div>
+        <div id="turn-panel">
+            <span class="turn-label">Turn</span>
+            <span id="turn-badge" class="turn-badge none">--</span>
+            <span class="turn-label">EOU</span>
+            <div class="eou-bar-container"><div id="eou-bar"></div></div>
+            <span id="eou-value" class="eou-value">--</span>
+            <span id="threshold-value" class="threshold-value">th --</span>
         </div>
 
         <div class="section-label">인식 결과 (Final)</div>
@@ -197,15 +436,59 @@
             <span class="placeholder">확정된 인식 결과가 여기에 쌓입니다...</span>
         </div>
 
+        <!-- S2S 응답 -->
+        <div id="s2s-panel">
+            <div class="section-label">AI 응답 (S2S)</div>
+            <div id="s2s-response-box">
+                <span class="placeholder">S2S 응답 대기 중...</span>
+            </div>
+            <div class="s2s-status">
+                <span id="s2s-badge" class="s2s-badge done">대기</span>
+                <span id="s2s-emotion-badge" class="emotion-badge neutral" style="display:none;"></span>
+                <span>TTFT: <span class="latency" id="s2s-ttft">--</span></span>
+                <span>First Audio: <span class="latency" id="s2s-first-audio">--</span></span>
+                <span>Total: <span class="latency" id="s2s-total">--</span></span>
+            </div>
+        </div>
+
         <div class="stats">
             <div>발화 수: <span class="stat-value" id="stat-utterances">0</span></div>
             <div>총 시간: <span class="stat-value" id="stat-duration">0.0s</span></div>
+        </div>
+
+        <!-- 규칙 관리 -->
+        <div class="rules-section">
+            <div class="rules-header" onclick="toggleRulesPanel()">
+                <div class="section-label" style="margin:0">Turn Detection 규칙 관리</div>
+                <span class="rules-toggle" id="rules-toggle">펼치기</span>
+            </div>
+            <div id="rules-panel">
+                <div class="rule-add-form">
+                    <input type="text" id="rule-suffix" placeholder="접미사 (예: 데요)" style="width:100px;">
+                    <select id="rule-ending">
+                        <option value="final">종결 (final)</option>
+                        <option value="connective">연결 (connective)</option>
+                        <option value="incomplete">미완 (incomplete)</option>
+                        <option value="interjection">감탄 (interjection)</option>
+                    </select>
+                    <input type="text" id="rule-note" placeholder="메모 (선택)" style="flex:1;min-width:100px;">
+                    <button class="btn-add" onclick="addRule()">추가</button>
+                </div>
+                <div class="rules-list" id="rules-list">
+                    <span class="placeholder">로딩 중...</span>
+                </div>
+                <div class="test-area">
+                    <input type="text" id="test-text" placeholder="테스트할 문장 입력 (예: 배송이 안 왔는데요)">
+                    <button class="btn-test" onclick="testRule()">테스트</button>
+                </div>
+                <div id="test-result"></div>
+            </div>
         </div>
     </div>
 
     <script>
     const TARGET_SAMPLE_RATE = 16000;
-    const CHUNK_MS = 250;  // 250ms 마다 서버로 전송
+    const CHUNK_MS = 150;  // 150ms 마다 서버로 전송
 
     let ws = null;
     let audioContext = null;
@@ -214,6 +497,18 @@
     let isRecording = false;
     let utteranceCount = 0;
     let totalDuration = 0;
+
+    // 발화별 오디오 녹음 저장
+    let currentUtteranceChunks = [];  // 현재 발화의 PCM 청크들
+    let savedAudios = [];             // [{blob, url}, ...] 발화별 저장된 오디오
+    let currentlyPlaying = null;      // 현재 재생 중인 Audio 객체
+
+    // S2S TTS 오디오 재생 큐
+    let ttsAudioQueue = [];           // base64 PCM 청크 큐
+    let ttsPlaying = false;           // TTS 재생 중 플래그
+    let ttsAudioContext = null;       // TTS 재생용 AudioContext
+    let ttsCurrentSource = null;      // 현재 재생 중인 AudioBufferSource
+    let s2sActive = false;            // S2S 응답 진행 중 플래그
 
     // AudioWorklet 프로세서 코드 (인라인)
     const processorCode = `
@@ -261,6 +556,93 @@
     registerProcessor('pcm-processor', PCMProcessor);
     `;
 
+    function createWavBlob(int16Chunks) {
+        // PCM int16 청크들을 WAV Blob으로 변환
+        let totalLength = 0;
+        for (const chunk of int16Chunks) totalLength += chunk.length;
+
+        const wavBuffer = new ArrayBuffer(44 + totalLength * 2);
+        const view = new DataView(wavBuffer);
+
+        // WAV 헤더
+        const writeString = (offset, str) => {
+            for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+        };
+        writeString(0, 'RIFF');
+        view.setUint32(4, 36 + totalLength * 2, true);
+        writeString(8, 'WAVE');
+        writeString(12, 'fmt ');
+        view.setUint32(16, 16, true);          // chunk size
+        view.setUint16(20, 1, true);           // PCM
+        view.setUint16(22, 1, true);           // mono
+        view.setUint32(24, 16000, true);       // sample rate
+        view.setUint32(28, 32000, true);       // byte rate
+        view.setUint16(32, 2, true);           // block align
+        view.setUint16(34, 16, true);          // bits per sample
+        writeString(36, 'data');
+        view.setUint32(40, totalLength * 2, true);
+
+        // PCM 데이터
+        let offset = 44;
+        for (const chunk of int16Chunks) {
+            for (let i = 0; i < chunk.length; i++) {
+                view.setInt16(offset, chunk[i], true);
+                offset += 2;
+            }
+        }
+
+        return new Blob([wavBuffer], { type: 'audio/wav' });
+    }
+
+    function playUtterance(index, btnElement) {
+        // 이미 재생 중이면 정지
+        if (currentlyPlaying) {
+            currentlyPlaying.pause();
+            currentlyPlaying = null;
+            document.querySelectorAll('.btn-play.playing').forEach(b => b.classList.remove('playing'));
+        }
+
+        const saved = savedAudios[index];
+        if (!saved) return;
+
+        const audio = new Audio(saved.url);
+        currentlyPlaying = audio;
+        btnElement.classList.add('playing');
+
+        audio.onended = () => {
+            btnElement.classList.remove('playing');
+            currentlyPlaying = null;
+        };
+        audio.play();
+    }
+
+    function restartSession() {
+        // 재생 중지
+        if (currentlyPlaying) {
+            currentlyPlaying.pause();
+            currentlyPlaying = null;
+        }
+
+        // 저장된 오디오 URL 해제
+        for (const saved of savedAudios) {
+            if (saved.url) URL.revokeObjectURL(saved.url);
+        }
+        savedAudios = [];
+        currentUtteranceChunks = [];
+
+        // UI 초기화
+        utteranceCount = 0;
+        totalDuration = 0;
+        document.getElementById('stat-utterances').textContent = '0';
+        document.getElementById('stat-duration').textContent = '0.0s';
+        document.getElementById('results-box').innerHTML =
+            '<span class="placeholder">확정된 인식 결과가 여기에 쌓입니다...</span>';
+        document.getElementById('partial-box').innerHTML =
+            '<span class="placeholder">음성을 입력하면 여기에 실시간으로 표시됩니다...</span>';
+        document.getElementById('partial-box').classList.remove('has-text');
+        resetTurnPanel();
+    }
+
     async function toggleRecording() {
         if (isRecording) {
             stopRecording();
@@ -303,6 +685,22 @@
 
                 workletNode = new AudioWorkletNode(audioContext, 'pcm-processor');
                 workletNode.port.onmessage = (e) => {
+                    const pcmCopy = new Int16Array(new Int16Array(e.data));
+                    currentUtteranceChunks.push(pcmCopy);
+
+                    // Client-side barge-in: TTS 재생 중 사용자 음성 감지
+                    if (ttsPlaying) {
+                        let sumSq = 0;
+                        for (let i = 0; i < pcmCopy.length; i++) {
+                            const s = pcmCopy[i] / 32768.0;
+                            sumSq += s * s;
+                        }
+                        const rms = Math.sqrt(sumSq / pcmCopy.length);
+                        if (rms > 0.03) {
+                            triggerBargeIn();
+                        }
+                    }
+
                     if (ws && ws.readyState === WebSocket.OPEN) {
                         ws.send(e.data);
                     }
@@ -359,25 +757,81 @@
             '<span class="placeholder">음성을 입력하면 여기에 실시간으로 표시됩니다...</span>';
     }
 
+    const ENDING_LABELS = {
+        'final': '종결', 'interjection': '감탄', 'connective': '연결',
+        'incomplete': '미완', 'transformative': '전성', 'unknown': '?'
+    };
+
+    function updateTurnPanel(ending, eou, threshold) {
+        const badge = document.getElementById('turn-badge');
+        badge.className = 'turn-badge ' + (ending || 'none');
+        badge.textContent = ENDING_LABELS[ending] || '--';
+
+        const bar = document.getElementById('eou-bar');
+        const pct = Math.round((eou || 0) * 100);
+        bar.style.width = pct + '%';
+        if (eou >= 0.8)      bar.style.background = '#22c55e';
+        else if (eou >= 0.5) bar.style.background = '#eab308';
+        else if (eou >= 0.3) bar.style.background = '#f97316';
+        else                 bar.style.background = '#ef4444';
+
+        document.getElementById('eou-value').textContent = (eou || 0).toFixed(2);
+        document.getElementById('threshold-value').textContent = 'th ' + (threshold || '--') + 's';
+    }
+
+    function resetTurnPanel() {
+        document.getElementById('turn-badge').className = 'turn-badge none';
+        document.getElementById('turn-badge').textContent = '--';
+        document.getElementById('eou-bar').style.width = '0%';
+        document.getElementById('eou-value').textContent = '--';
+        document.getElementById('threshold-value').textContent = 'th --';
+    }
+
     function handleMessage(msg) {
         switch (msg.type) {
             case 'level':
                 document.getElementById('level-bar').style.width = (msg.value * 100) + '%';
+                // Barge-in (서버 level 백업): TTS 재생 중 사용자 음성 감지
+                if (ttsPlaying && msg.value > 0.08) {
+                    triggerBargeIn();
+                }
                 break;
 
             case 'partial':
                 const partialBox = document.getElementById('partial-box');
                 partialBox.classList.add('has-text');
                 partialBox.innerHTML = msg.text + '<span class="cursor"></span>';
+                // Turn Detection 패널 업데이트
+                if (msg.turn) {
+                    updateTurnPanel(msg.turn.ending, msg.turn.eou, msg.turn.threshold);
+                }
                 break;
 
             case 'final':
-                // Partial 영역 초기화
+                // 현재 발화 오디오를 WAV로 저장 (발화 부분만 추출)
+                const audioIndex = savedAudios.length;
+                if (currentUtteranceChunks.length > 0 && msg.duration > 0) {
+                    // 서버 duration + 0.5초 여유분만 뒤에서 추출 (앞쪽 무음 제거)
+                    const samplesPerChunk = TARGET_SAMPLE_RATE * CHUNK_MS / 1000;
+                    const samplesNeeded = Math.ceil((msg.duration + 0.5) * TARGET_SAMPLE_RATE);
+                    const chunksNeeded = Math.ceil(samplesNeeded / samplesPerChunk);
+                    const startIdx = Math.max(0, currentUtteranceChunks.length - chunksNeeded);
+                    const relevantChunks = currentUtteranceChunks.slice(startIdx);
+                    const wavBlob = createWavBlob(relevantChunks);
+                    const wavUrl = URL.createObjectURL(wavBlob);
+                    savedAudios.push({ blob: wavBlob, url: wavUrl });
+                } else {
+                    savedAudios.push({ blob: null, url: null });
+                }
+                currentUtteranceChunks = [];  // 다음 발화를 위해 초기화
+
+                // Partial 영역 + Turn 패널 초기화
                 const pBox = document.getElementById('partial-box');
                 pBox.classList.remove('has-text');
                 pBox.innerHTML = '<span class="placeholder">다음 발화 대기 중...</span>';
+                resetTurnPanel();
 
-                // Final 결과 추가
+                // Final 결과 추가 (재생 버튼 포함)
                 const resultsBox = document.getElementById('results-box');
                 if (resultsBox.querySelector('.placeholder')) {
                     resultsBox.innerHTML = '';
@@ -385,7 +839,49 @@
 
                 const div = document.createElement('div');
                 div.className = 'utterance';
-                div.innerHTML = `<span class="text">${msg.text}</span><span class="meta">${msg.duration}s</span>`;
+
+                const playBtn = document.createElement('button');
+                playBtn.className = 'btn-play';
+                playBtn.innerHTML = '&#9654;';
+                playBtn.title = '녹음 재생';
+                const idx = audioIndex;
+                playBtn.onclick = function() { playUtterance(idx, this); };
+
+                const textSpan = document.createElement('span');
+                textSpan.className = 'text';
+                textSpan.textContent = msg.text;
+
+                const metaSpan = document.createElement('span');
+                metaSpan.className = 'meta';
+                metaSpan.textContent = msg.duration + 's';
+
+                // Endpoint 태그
+                const epTag = document.createElement('span');
+                epTag.className = 'ep-tag';
+                if (msg.turn) {
+                    const eou = msg.turn.eou || 0;
+                    const ending = msg.turn.ending || '';
+                    const endingKo = {
+                        'final': '종결', 'interjection': '감탄',
+                        'connective': '연결', 'incomplete': '미완',
+                        'transformative': '전성', 'unknown': '?'
+                    }[ending] || ending;
+                    if (eou >= 0.8) {
+                        epTag.classList.add('fast');
+                        epTag.textContent = endingKo + ' ' + eou.toFixed(1);
+                    } else if (eou >= 0.4) {
+                        epTag.classList.add('normal');
+                        epTag.textContent = endingKo + ' ' + eou.toFixed(1);
+                    } else {
+                        epTag.classList.add('slow');
+                        epTag.textContent = endingKo + ' ' + eou.toFixed(1);
+                    }
+                }
+
+                div.appendChild(playBtn);
+                div.appendChild(textSpan);
+                div.appendChild(epTag);
+                div.appendChild(metaSpan);
                 resultsBox.appendChild(div);
                 resultsBox.scrollTop = resultsBox.scrollHeight;
 
@@ -395,7 +891,258 @@
                 document.getElementById('stat-utterances').textContent = utteranceCount;
                 document.getElementById('stat-duration').textContent = totalDuration.toFixed(1) + 's';
                 break;
+
+            // ── S2S 메시지 처리 ──
+            case 's2s_llm_start':
+                s2sActive = true;
+                document.getElementById('s2s-panel').classList.add('active');
+                document.getElementById('s2s-response-box').innerHTML = '<span class="cursor"></span>';
+                document.getElementById('s2s-badge').className = 's2s-badge thinking';
+                document.getElementById('s2s-badge').textContent = 'LLM 생성 중';
+                break;
+
+            case 's2s_emotion':
+                const EMOTION_KO = {anger:'분노',anxiety:'불안',neutral:'중립',satisfaction:'만족',joy:'기쁨'};
+                const emBadge = document.getElementById('s2s-emotion-badge');
+                emBadge.className = 'emotion-badge ' + msg.emotion;
+                emBadge.textContent = EMOTION_KO[msg.emotion] || msg.emotion;
+                emBadge.style.display = 'inline-block';
+                break;
+
+            case 's2s_llm_token':
+                const respBox = document.getElementById('s2s-response-box');
+                respBox.innerHTML = msg.full_text + '<span class="cursor"></span>';
+                break;
+
+            case 's2s_tts_audio':
+                document.getElementById('s2s-badge').className = 's2s-badge speaking';
+                document.getElementById('s2s-badge').textContent = 'TTS 재생 중';
+                // PCM int16 base64 → 재생 큐에 추가
+                enqueueTTSAudio(msg.audio_b64, msg.sample_rate);
+                break;
+
+            case 's2s_llm_done':
+                document.getElementById('s2s-response-box').innerHTML = msg.full_text;
+                break;
+
+            case 's2s_done':
+                s2sActive = false;
+                const badge = document.getElementById('s2s-badge');
+                if (msg.latency && msg.latency.cancelled) {
+                    badge.className = 's2s-badge done';
+                    badge.textContent = '끼어들기';
+                } else {
+                    badge.className = 's2s-badge done';
+                    badge.textContent = '완료';
+                }
+                if (msg.latency) {
+                    document.getElementById('s2s-ttft').textContent =
+                        msg.latency.ttft_ms ? msg.latency.ttft_ms + 'ms' : '--';
+                    document.getElementById('s2s-first-audio').textContent =
+                        msg.latency.first_audio_ms ? msg.latency.first_audio_ms + 'ms' : '--';
+                    document.getElementById('s2s-total').textContent =
+                        msg.latency.total_ms ? msg.latency.total_ms + 'ms' : '--';
+                }
+                break;
+
+            case 's2s_cancelled':
+                s2sActive = false;
+                document.getElementById('s2s-badge').className = 's2s-badge done';
+                document.getElementById('s2s-badge').textContent = '끼어들기';
+                break;
+
+            case 's2s_error':
+                document.getElementById('s2s-response-box').innerHTML =
+                    '<span style="color:#ef4444;">S2S 오류: ' + msg.error + '</span>';
+                document.getElementById('s2s-badge').className = 's2s-badge done';
+                document.getElementById('s2s-badge').textContent = '오류';
+                break;
         }
+    }
+
+    // ── Barge-in (끼어들기) ──
+
+    let bargeInCooldown = false;
+    function triggerBargeIn() {
+        if (bargeInCooldown) return;
+        bargeInCooldown = true;
+        setTimeout(() => { bargeInCooldown = false; }, 2000);
+
+        console.log('[Barge-in] User started speaking during TTS');
+        // 1. TTS 재생 즉시 중단
+        stopTTSPlayback();
+        // 2. 서버에 barge-in 알림
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'barge_in' }));
+        }
+        s2sActive = false;
+        document.getElementById('s2s-badge').className = 's2s-badge done';
+        document.getElementById('s2s-badge').textContent = '끼어들기';
+        // 3. AI 응답 텍스트에 끼어들기 표시
+        const respBox = document.getElementById('s2s-response-box');
+        const currentText = respBox.textContent || '';
+        respBox.innerHTML = '<span style="color:#475569;text-decoration:line-through;">' +
+            currentText + '</span> <span style="color:#f59e0b;font-weight:600;">[ 끼어들기 ]</span>';
+    }
+
+    function stopTTSPlayback() {
+        // 재생 큐 비우기
+        ttsAudioQueue = [];
+        ttsPlaying = false;
+        // 현재 재생 중인 소스 중단
+        if (ttsCurrentSource) {
+            try { ttsCurrentSource.stop(); } catch(e) {}
+            ttsCurrentSource = null;
+        }
+    }
+
+    // ── S2S TTS 오디오 재생 ──
+
+    function enqueueTTSAudio(base64Pcm, sampleRate) {
+        ttsAudioQueue.push({ base64: base64Pcm, sr: sampleRate });
+        if (!ttsPlaying) {
+            playNextTTSChunk();
+        }
+    }
+
+    async function playNextTTSChunk() {
+        if (ttsAudioQueue.length === 0) {
+            ttsPlaying = false;
+            return;
+        }
+        ttsPlaying = true;
+
+        const chunk = ttsAudioQueue.shift();
+        const pcmBytes = Uint8Array.from(atob(chunk.base64), c => c.charCodeAt(0));
+        const int16 = new Int16Array(pcmBytes.buffer);
+
+        // int16 → float32
+        const float32 = new Float32Array(int16.length);
+        for (let i = 0; i < int16.length; i++) {
+            float32[i] = int16[i] / 32768.0;
+        }
+
+        // AudioContext로 재생
+        if (!ttsAudioContext) {
+            ttsAudioContext = new AudioContext({ sampleRate: chunk.sr });
+        }
+
+        const buffer = ttsAudioContext.createBuffer(1, float32.length, chunk.sr);
+        buffer.getChannelData(0).set(float32);
+
+        const source = ttsAudioContext.createBufferSource();
+        source.buffer = buffer;
+        source.connect(ttsAudioContext.destination);
+        ttsCurrentSource = source;
+        source.onended = () => {
+            ttsCurrentSource = null;
+            playNextTTSChunk();
+        };
+        source.start();
+    }
+
+    // ── 규칙 관리 ──
+
+    function toggleRulesPanel() {
+        const panel = document.getElementById('rules-panel');
+        const toggle = document.getElementById('rules-toggle');
+        if (panel.classList.contains('open')) {
+            panel.classList.remove('open');
+            toggle.textContent = '펼치기';
+        } else {
+            panel.classList.add('open');
+            toggle.textContent = '접기';
+            loadRules();
+        }
+    }
+
+    async function loadRules() {
+        try {
+            const res = await fetch('/api/rules');
+            const data = await res.json();
+            renderRules(data.rules || []);
+        } catch (e) {
+            document.getElementById('rules-list').innerHTML =
+                '<span class="placeholder">규칙 로드 실패</span>';
+        }
+    }
+
+    function renderRules(rules) {
+        const list = document.getElementById('rules-list');
+        if (rules.length === 0) {
+            list.innerHTML = '<span class="placeholder">등록된 규칙이 없습니다</span>';
+            return;
+        }
+        const endingKo = {
+            'final': '종결', 'connective': '연결', 'incomplete': '미완',
+            'interjection': '감탄', 'transformative': '전성', 'unknown': '?'
+        };
+        list.innerHTML = rules.map(r => `
+            <div class="rule-row">
+                <span class="rule-suffix">"${r.suffix}"</span>
+                <span class="turn-badge ${r.ending} rule-ending">${endingKo[r.ending] || r.ending}</span>
+                <span class="rule-note">${r.note || ''}</span>
+                <button class="btn-del" onclick="deleteRule('${r.suffix}')">삭제</button>
+            </div>
+        `).join('');
+    }
+
+    async function addRule() {
+        const suffix = document.getElementById('rule-suffix').value.trim();
+        const ending = document.getElementById('rule-ending').value;
+        const note = document.getElementById('rule-note').value.trim();
+        if (!suffix) { alert('접미사를 입력하세요'); return; }
+
+        const res = await fetch('/api/rules', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({suffix, ending, note})
+        });
+        const data = await res.json();
+        if (data.error) { alert(data.error); return; }
+
+        document.getElementById('rule-suffix').value = '';
+        document.getElementById('rule-note').value = '';
+        loadRules();
+    }
+
+    async function deleteRule(suffix) {
+        const res = await fetch('/api/rules/' + encodeURIComponent(suffix), {method: 'DELETE'});
+        const data = await res.json();
+        if (data.error) { alert(data.error); return; }
+        loadRules();
+    }
+
+    // S2S 상태 확인 (페이지 로드 시)
+    (async function checkS2S() {
+        try {
+            const res = await fetch('/api/s2s/status');
+            const data = await res.json();
+            const indicator = document.getElementById('s2s-indicator');
+            if (data.enabled && data.loaded) {
+                indicator.innerHTML = '| <span style="color:#a78bfa;font-weight:600;">S2S ON</span>';
+                document.getElementById('s2s-panel').classList.add('active');
+                document.getElementById('s2s-response-box').innerHTML =
+                    '<span class="placeholder">S2S 활성화됨 — 음성 인식 후 AI가 응답합니다</span>';
+            }
+        } catch(e) { /* ignore */ }
+    })();
+
+    async function testRule() {
+        const text = document.getElementById('test-text').value.trim();
+        if (!text) return;
+        const res = await fetch('/api/rules/test', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({text})
+        });
+        const data = await res.json();
+        const endingKo = {
+            'final': '종결', 'connective': '연결', 'incomplete': '미완',
+            'interjection': '감탄', 'transformative': '전성', 'unknown': '?'
+        };
+        document.getElementById('test-result').innerHTML =
+            `"${data.text}" → <span class="turn-badge ${data.ending}">${endingKo[data.ending] || data.ending}</span> EOU: ${data.eou}`;
     }
     </script>
 </body>
