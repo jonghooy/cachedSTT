@@ -32,7 +32,7 @@ STYLETTS2_PATH = "/home/jonghooy/work/zhisper/styletts2_korean"
 
 # ── vLLM API 설정 ──
 VLLM_BASE_URL = "http://localhost:8000/v1"
-VLLM_MODEL = "/mnt/usb/models/Qwen3.5-9B"
+VLLM_MODEL = "/mnt/usb/models/Qwen3.5-9B-AWQ"
 LLM_MAX_TOKENS = 80
 LLM_TEMPERATURE = 0.7
 LLM_TOP_P = 0.9
