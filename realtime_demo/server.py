@@ -1000,33 +1000,32 @@ async def websocket_endpoint(websocket: WebSocket):
     session = StreamingSession()
     loop = asyncio.get_event_loop()
 
-    # Auto-enter main scenario if configured (skip if freeform mode)
-    if dialogue_engine and not session._skip_dialogue_engine:
-        ds = session.get_dialogue_session()
-        main_result = await dialogue_engine.auto_enter_main(ds)
-        session.sync_dialogue_session(ds)
-        if main_result and main_result.response_text:
-            await websocket.send_json({
-                "type": "scenario_response",
-                "text": main_result.response_text,
-                "mode": "scenario",
-                "action": main_result.action,
-                "utterance_id": 0,
-            })
-            # TTS for greeting
-            if s2s_pipeline and s2s_pipeline.tts and s2s_pipeline.tts.is_loaded():
-                try:
-                    import base64 as _b64_main
-                    pcm_bytes, sr = await loop.run_in_executor(
-                        gpu_executor,
-                        s2s_pipeline.tts.synthesize_to_pcm16,
-                        main_result.response_text,
-                    )
-                    if pcm_bytes:
-                        await websocket.send_json({
-                            "type": "tts_audio",
-                            "audio": _b64_main.b64encode(pcm_bytes).decode(),
-                            "sample_rate": sr,
+    # Default: freeform (일반 S2S) mode.
+    # Scenario mode is entered via UI toggle (set_mode message).
+    session._skip_dialogue_engine = True  # Start in freeform by default
+    logger.info("Session started in freeform mode (use mode toggle for scenario)")
+
+    if False:  # Auto-enter disabled — scenario mode entered via UI toggle only
+        await websocket.send_json({
+            "type": "scenario_response",
+            "text": "",
+            "mode": "scenario",
+            "action": None,
+            "utterance_id": 0,
+        })
+        if s2s_pipeline and s2s_pipeline.tts and s2s_pipeline.tts.is_loaded():
+            try:
+                import base64 as _b64_main
+                pcm_bytes, sr = await loop.run_in_executor(
+                    gpu_executor,
+                    s2s_pipeline.tts.synthesize_to_pcm16,
+                    "",
+                )
+                if pcm_bytes:
+                    await websocket.send_json({
+                        "type": "tts_audio",
+                        "audio": _b64_main.b64encode(pcm_bytes).decode(),
+                        "sample_rate": sr,
                             "sentence": main_result.response_text,
                             "sentence_idx": 0,
                         })
