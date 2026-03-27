@@ -136,6 +136,7 @@ class StreamingSession:
             "awaiting_confirm": False,
             "_scenario_snapshot": None,
         }
+        self._skip_dialogue_engine: bool = False
 
         # 노이즈 보정
         self.noise_samples = []
@@ -999,8 +1000,8 @@ async def websocket_endpoint(websocket: WebSocket):
     session = StreamingSession()
     loop = asyncio.get_event_loop()
 
-    # Auto-enter main scenario if configured
-    if dialogue_engine:
+    # Auto-enter main scenario if configured (skip if freeform mode)
+    if dialogue_engine and not session._skip_dialogue_engine:
         ds = session.get_dialogue_session()
         main_result = await dialogue_engine.auto_enter_main(ds)
         session.sync_dialogue_session(ds)
@@ -1051,6 +1052,20 @@ async def websocket_endpoint(websocket: WebSocket):
                         s2s_cancel_event.set()
                         logger.info("[Barge-in] S2S cancelled by user")
                     await websocket.send_json({"type": "s2s_cancelled"})
+                    continue
+                # 대화 모드 전환 (시나리오 ↔ 일반 S2S)
+                if msg.get("type") == "set_mode":
+                    new_mode = msg.get("mode", "scenario")
+                    session.dialogue_mode = "freeform" if new_mode == "freeform" else "freeform"
+                    session.scenario_state = {
+                        "scenario_id": None, "scenario_version": None, "current_node": None,
+                        "slots": {}, "variables": {}, "history": [], "retry_count": 0,
+                        "prosody": None, "stack": [], "awaiting_confirm": False,
+                        "_scenario_snapshot": None,
+                    }
+                    session._skip_dialogue_engine = (new_mode == "freeform")
+                    logger.info(f"[Mode] Switched to: {new_mode}")
+                    await websocket.send_json({"type": "mode_changed", "mode": new_mode})
                     continue
                 # 대화 히스토리 리셋
                 if msg.get("type") == "reset_history":
@@ -1292,7 +1307,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     continue
 
                 # ── Dialogue Engine: try scenario matching first ──
-                if dialogue_engine:
+                if dialogue_engine and not getattr(session, '_skip_dialogue_engine', False):
                     ds = session.get_dialogue_session()
                     _prosody = _compute_prosody(session, session.last_text, buffer_seconds)
                     logger.info(f"[DialogueEngine] Processing: mode={ds['dialogue_mode']}, text=\"{session.last_text}\", node={ds['scenario_state'].get('current_node')}")

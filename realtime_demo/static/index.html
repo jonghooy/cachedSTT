@@ -454,6 +454,10 @@
             </div>
             <button id="btn-restart" onclick="restartSession()">RESTART</button>
             <button id="btn-reset-history" onclick="resetHistory()">대화 리셋</button>
+            <div id="mode-toggle" onclick="toggleDialogueMode()" style="display:inline-flex; align-items:center; gap:6px; padding:4px 10px; background:#1e293b; border:1px solid #334155; border-radius:6px; cursor:pointer; user-select:none;">
+                <span style="font-size:12px; color:#94a3b8;">모드:</span>
+                <span id="mode-badge" style="padding:2px 8px; border-radius:4px; font-size:11px; font-weight:600; background:#1e3a5f; color:#60a5fa;">시나리오</span>
+            </div>
             <div id="lang-toggle" onclick="toggleLanguageMode()">
                 <span>언어:</span>
                 <span id="lang-badge" class="ko">한국어</span>
@@ -671,6 +675,32 @@
             currentlyPlaying = null;
         };
         audio.play();
+    }
+
+    // ── 대화 모드 토글 (시나리오 ↔ 일반 S2S) ──
+    let dialogueMode = 'scenario';  // 'scenario' or 'freeform'
+
+    function toggleDialogueMode() {
+        if (dialogueMode === 'scenario') {
+            dialogueMode = 'freeform';
+            const badge = document.getElementById('mode-badge');
+            badge.textContent = '일반 S2S';
+            badge.style.background = '#166534';
+            badge.style.color = '#4ade80';
+            // Notify server to skip dialogue engine
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'set_mode', mode: 'freeform' }));
+            }
+        } else {
+            dialogueMode = 'scenario';
+            const badge = document.getElementById('mode-badge');
+            badge.textContent = '시나리오';
+            badge.style.background = '#1e3a5f';
+            badge.style.color = '#60a5fa';
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'set_mode', mode: 'scenario' }));
+            }
+        }
     }
 
     async function restartSession() {
