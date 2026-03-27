@@ -83,9 +83,22 @@ class SlotManager:
             return None
 
     async def extract(self, slot: SlotDef, text: str) -> Any:
-        """Extract slot value using the configured method."""
+        """Extract slot value using the configured method.
+
+        Falls back to LLM if regex fails and LLM engine is available.
+        """
         if slot.extract == "regex":
-            return self.extract_regex(slot, text)
+            result = self.extract_regex(slot, text)
+            if result is not None:
+                return result
+            # Regex failed → fallback to LLM if available
+            if self.llm_engine:
+                logger.info(f"Regex failed for slot '{slot.name}', falling back to LLM")
+                return await self.extract_llm(slot, text)
+            return None
         elif slot.extract == "llm":
+            return await self.extract_llm(slot, text)
+        # Unknown extract method → try LLM
+        if self.llm_engine:
             return await self.extract_llm(slot, text)
         return None
