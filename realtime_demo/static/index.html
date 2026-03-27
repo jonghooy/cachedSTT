@@ -478,6 +478,20 @@
             <span id="threshold-value" class="threshold-value">th --</span>
         </div>
 
+        <!-- 힌트 단어 패널 -->
+        <div id="hints-panel" style="margin: 0.5rem 0; padding: 0.5rem; background: #1e293b; border-radius: 6px; border: 1px solid #334155;">
+            <div style="display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.4rem;">
+                <span style="color: #94a3b8; font-size: 0.8rem; font-weight: 600;">힌트 단어</span>
+                <input id="hint-input" type="text" placeholder="단어 입력 후 Enter"
+                       style="flex:1; padding: 0.25rem 0.5rem; border-radius: 4px; border: 1px solid #475569; background: #0f172a; color: #e2e8f0; font-size: 0.8rem;"
+                       onkeydown="if(event.key==='Enter')addHint()">
+                <button onclick="addHint()" style="padding: 0.2rem 0.6rem; border-radius: 4px; border: 1px solid #475569; background: #334155; color: #e2e8f0; font-size: 0.75rem; cursor: pointer;">추가</button>
+            </div>
+            <div id="hints-list" style="display: flex; flex-wrap: wrap; gap: 0.3rem; min-height: 1.2rem;">
+                <span style="color: #64748b; font-size: 0.75rem;">없음</span>
+            </div>
+        </div>
+
         <div class="section-label">인식 결과 (Final)</div>
         <div id="results-box">
             <span class="placeholder">확정된 인식 결과가 여기에 쌓입니다...</span>
@@ -761,6 +775,49 @@
             ws.send(JSON.stringify({type: 'reset_history'}));
         }
     }
+
+    // ── 힌트 단어 관리 ──
+    async function loadHints() {
+        try {
+            const res = await fetch('/api/hints');
+            const data = await res.json();
+            renderHints(data.words || []);
+        } catch(e) {}
+    }
+
+    function renderHints(words) {
+        const list = document.getElementById('hints-list');
+        if (!words.length) {
+            list.innerHTML = '<span style="color:#64748b;font-size:0.75rem;">없음</span>';
+            return;
+        }
+        list.innerHTML = words.map(w =>
+            `<span style="display:inline-flex;align-items:center;gap:0.2rem;padding:0.15rem 0.5rem;background:#334155;border-radius:3px;color:#e2e8f0;font-size:0.75rem;">${w}<span onclick="removeHint('${w}')" style="cursor:pointer;color:#ef4444;margin-left:0.2rem;">&times;</span></span>`
+        ).join('');
+    }
+
+    async function addHint() {
+        const input = document.getElementById('hint-input');
+        const word = input.value.trim();
+        if (!word) return;
+        try {
+            const res = await fetch('/api/hints/add', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({word})});
+            const data = await res.json();
+            if (data.ok) renderHints(data.words);
+            input.value = '';
+        } catch(e) {}
+    }
+
+    async function removeHint(word) {
+        try {
+            const res = await fetch('/api/hints/' + encodeURIComponent(word), {method:'DELETE'});
+            const data = await res.json();
+            if (data.ok) renderHints(data.words);
+        } catch(e) {}
+    }
+
+    // 페이지 로드 시 힌트 목록 불러오기
+    loadHints();
 
     let languageMode = 'ko';
     let detectedLanguage = 'ko';

@@ -20,6 +20,7 @@ import argparse
 import asyncio
 import base64
 import copy
+import json
 import logging
 import sys
 import tempfile
@@ -642,6 +643,14 @@ async def startup():
     asyncio.create_task(stt_batch.run())
     logger.info("STT Batch Processor started (30ms collect window)")
 
+    # 6.5. 힌트 단어 로드 + boosting tree 적용
+    saved_hints = _load_hint_words()
+    if saved_hints:
+        _apply_boosting(model, saved_hints)
+        if model_en:
+            _apply_boosting(model_en, saved_hints)
+        logger.info(f"Hint words loaded: {len(saved_hints)} words")
+
     # 7. Turn Detector 초기화
     global turn_detector
     log_dir = Path(__file__).parent / "logs" / "turn_decisions"
@@ -780,6 +789,98 @@ async def test_rule(body: dict):
     ending = turn_detector.classify_ending(text)
     eou = turn_detector.compute_eou(text, 0.0, 0, 0.01)
     return {"text": text, "ending": ending, "eou": eou}
+
+
+# ── Hint Words (Word Boosting) API ──
+
+HINT_WORDS_PATH = Path(__file__).parent / "rules" / "hint_words.json"
+BOOSTING_ALPHA = 0.5  # boosting tree weight
+
+def _load_hint_words() -> list:
+    """힌트 단어 파일 로드."""
+    if HINT_WORDS_PATH.exists():
+        try:
+            with open(HINT_WORDS_PATH, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+            if not content:
+                return []
+            data = json.loads(content)
+            return data.get("words", [])
+        except (json.JSONDecodeError, KeyError):
+            return []
+    return []
+
+def _save_hint_words(words: list):
+    """힌트 단어 파일 저장."""
+    HINT_WORDS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(HINT_WORDS_PATH, "w", encoding="utf-8") as f:
+        json.dump({"words": words}, f, ensure_ascii=False, indent=2)
+
+def _apply_boosting(stt_model, words: list, alpha: float = BOOSTING_ALPHA):
+    """STT 모델에 boosting tree 적용 (또는 해제)."""
+    try:
+        decoding_cfg = stt_model.cfg.decoding
+        with open_dict(decoding_cfg):
+            if words:
+                decoding_cfg.greedy.boosting_tree.key_phrases_list = words
+                decoding_cfg.greedy.boosting_tree_alpha = alpha
+                decoding_cfg.greedy.boosting_tree.context_score = 1.0
+                decoding_cfg.greedy.boosting_tree.depth_scaling = 2.0
+            else:
+                decoding_cfg.greedy.boosting_tree.key_phrases_list = None
+                decoding_cfg.greedy.boosting_tree_alpha = 0.0
+        stt_model.change_decoding_strategy(decoding_cfg)
+        logger.info(f"[Hints] Applied {len(words)} words, alpha={alpha if words else 0.0}")
+    except Exception as e:
+        logger.error(f"[Hints] Failed to apply boosting: {e}")
+
+
+@app.get("/api/hints")
+async def get_hints():
+    """현재 힌트 단어 목록."""
+    words = _load_hint_words()
+    return {"words": words, "alpha": BOOSTING_ALPHA}
+
+
+@app.post("/api/hints")
+async def set_hints(body: dict):
+    """힌트 단어 등록 (전체 교체)."""
+    words = body.get("words", [])
+    words = [w.strip() for w in words if w.strip()]
+    _save_hint_words(words)
+    # 한국어 + 영어 STT 모두 적용
+    _apply_boosting(model, words)
+    if model_en:
+        _apply_boosting(model_en, words)
+    return {"ok": True, "words": words, "count": len(words)}
+
+
+@app.post("/api/hints/add")
+async def add_hint(body: dict):
+    """힌트 단어 추가."""
+    word = body.get("word", "").strip()
+    if not word:
+        return {"error": "word가 비어있습니다"}
+    words = _load_hint_words()
+    if word not in words:
+        words.append(word)
+        _save_hint_words(words)
+        _apply_boosting(model, words)
+        if model_en:
+            _apply_boosting(model_en, words)
+    return {"ok": True, "words": words}
+
+
+@app.delete("/api/hints/{word}")
+async def delete_hint(word: str):
+    """힌트 단어 삭제."""
+    words = _load_hint_words()
+    words = [w for w in words if w != word]
+    _save_hint_words(words)
+    _apply_boosting(model, words)
+    if model_en:
+        _apply_boosting(model_en, words)
+    return {"ok": True, "words": words}
 
 
 import re as _re
