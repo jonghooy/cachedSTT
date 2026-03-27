@@ -22,11 +22,13 @@ import base64
 import copy
 import logging
 import sys
+import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
+import soundfile as sf
 import torch
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -51,6 +53,7 @@ cli_args, _ = parser.parse_known_args()
 
 # ── 설정 ──
 MODEL_PATH = "/home/jonghooy/work/timbel-asr-pilot/pretrained_models/runpod_trained_Stage3-best-cer0.1968.nemo"
+MODEL_PATH_EN = "/home/jonghooy/work/timbel-asr-pilot/pretrained_models/nemotron-speech-streaming-en-0.6b.nemo"
 SAMPLE_RATE = 16000
 SILENCE_THRESHOLD = 0.008       # RMS 에너지 임계값 (보정 전 기본값)
 SILENCE_DURATION = 1.2          # 무음 N초 이상이면 Final
@@ -68,6 +71,10 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 model = None
 preprocessor = None  # 스트리밍용 전처리기 (dither=0, pad_to=0)
 streaming_cfg = None
+model_en = None          # 영어 STT 모델
+preprocessor_en = None   # 영어 STT 전처리기
+streaming_cfg_en = None  # 영어 스트리밍 설정
+lang_id_model = None     # 언어 감지 모델
 turn_detector = None  # Turn Detection (형태소 기반)
 s2s_pipeline = None   # S2S Pipeline (LLM + TTS)
 knowledge_client = None  # Knowledge Service 클라이언트
@@ -135,11 +142,17 @@ class StreamingSession:
         self.noise_threshold = SILENCE_THRESHOLD
         self.noise_calibrated = False
 
+        # 언어 설정
+        self.language_mode = "ko"       # "ko" (한국어 전용) | "auto" (자동 감지)
+        self.detected_language = "ko"   # "ko" | "en"
+        self.lang_detected = False      # 감지 완료 여부
+
         self._init_caches()
 
     def _init_caches(self):
-        """인코더 캐시 초기화"""
-        cache = model.encoder.get_initial_cache_state(
+        """인코더 캐시 초기화 — detected_language에 따른 모델 사용"""
+        stt_model = model_en if self.detected_language == "en" else model
+        cache = stt_model.encoder.get_initial_cache_state(
             batch_size=1, dtype=torch.float32, device="cuda:0"
         )
         self.cache_last_channel = cache[0]
@@ -196,21 +209,23 @@ class StreamingSession:
         with torch.no_grad():
             audio_tensor = torch.from_numpy(self.audio_buffer).unsqueeze(0).to("cuda:0")
             audio_len = torch.tensor([len(self.audio_buffer)], device="cuda:0")
-            mel, mel_len = preprocessor(input_signal=audio_tensor, length=audio_len)
+            active_preprocessor = preprocessor_en if self.detected_language == "en" else preprocessor
+            mel, mel_len = active_preprocessor(input_signal=audio_tensor, length=audio_len)
             # mel: (1, n_mels, n_frames)
 
         total_mel_frames = mel.shape[2]
         chunks = []
+        active_streaming_cfg = streaming_cfg_en if self.detected_language == "en" else streaming_cfg
 
         while True:
             if self.step == 0:
-                chunk_size = _get_cfg_val(streaming_cfg.chunk_size, 0)
-                pre_encode_size = _get_cfg_val(streaming_cfg.pre_encode_cache_size, 0)
-                shift_size = _get_cfg_val(streaming_cfg.shift_size, 0)
+                chunk_size = _get_cfg_val(active_streaming_cfg.chunk_size, 0)
+                pre_encode_size = _get_cfg_val(active_streaming_cfg.pre_encode_cache_size, 0)
+                shift_size = _get_cfg_val(active_streaming_cfg.shift_size, 0)
             else:
-                chunk_size = _get_cfg_val(streaming_cfg.chunk_size, 1)
-                pre_encode_size = _get_cfg_val(streaming_cfg.pre_encode_cache_size, 1)
-                shift_size = _get_cfg_val(streaming_cfg.shift_size, 1)
+                chunk_size = _get_cfg_val(active_streaming_cfg.chunk_size, 1)
+                pre_encode_size = _get_cfg_val(active_streaming_cfg.pre_encode_cache_size, 1)
+                shift_size = _get_cfg_val(active_streaming_cfg.shift_size, 1)
 
             # 사용 가능한 mel 프레임이 충분한지 확인
             if self.mel_buffer_idx + chunk_size > total_mel_frames:
@@ -248,10 +263,12 @@ class StreamingSession:
         Returns:
             텍스트 (str) - 현재까지의 전체 디코딩 결과
         """
-        drop = streaming_cfg.drop_extra_pre_encoded if step_idx > 0 else 0
+        stt_model = model_en if self.detected_language == "en" else model
+        active_streaming_cfg = streaming_cfg_en if self.detected_language == "en" else streaming_cfg
+        drop = active_streaming_cfg.drop_extra_pre_encoded if step_idx > 0 else 0
 
         with torch.no_grad():
-            result = model.conformer_stream_step(
+            result = stt_model.conformer_stream_step(
                 processed_signal=mel_chunk,
                 processed_signal_length=chunk_length,
                 cache_last_channel=self.cache_last_channel,
@@ -283,13 +300,13 @@ class StreamingSession:
             token_ids = best_hyp[0].y_sequence
             if isinstance(token_ids, torch.Tensor):
                 token_ids = token_ids.cpu().tolist()
-            text = model.tokenizer.ids_to_text(token_ids)
+            text = stt_model.tokenizer.ids_to_text(token_ids)
             return text
 
         return ""
 
 
-def _batched_stream_step(sessions_and_chunks):
+def _batched_stream_step(sessions_and_chunks, stt_model=None):
     """여러 세션의 (session, mel_chunk, chunk_length, step_idx)를 배치로 추론.
 
     모든 항목이 step > 0이어야 함 (동일 chunk 파라미터).
@@ -297,6 +314,7 @@ def _batched_stream_step(sessions_and_chunks):
 
     Args:
         sessions_and_chunks: list of (session, mel_chunk, chunk_length, step_idx)
+        stt_model: 사용할 STT 모델 (None이면 한국어 모델 사용)
 
     Returns:
         list of text strings — 각 세션의 디코딩 결과
@@ -304,7 +322,10 @@ def _batched_stream_step(sessions_and_chunks):
     if not sessions_and_chunks:
         return []
 
-    drop = streaming_cfg.drop_extra_pre_encoded  # step > 0 공통
+    if stt_model is None:
+        stt_model = model
+
+    drop = stt_model.encoder.streaming_cfg.drop_extra_pre_encoded  # step > 0 공통
 
     # 1. Mel padding + stack
     mel_chunks = [item[1] for item in sessions_and_chunks]  # 각각 (1, n_mels, frames)
@@ -343,7 +364,7 @@ def _batched_stream_step(sessions_and_chunks):
 
     # 4. 배치 추론
     with torch.no_grad():
-        result = model.conformer_stream_step(
+        result = stt_model.conformer_stream_step(
             processed_signal=batched_mel,
             processed_signal_length=batched_len,
             cache_last_channel=cache_channel,
@@ -382,7 +403,7 @@ def _batched_stream_step(sessions_and_chunks):
             token_ids = hyp.y_sequence
             if isinstance(token_ids, torch.Tensor):
                 token_ids = token_ids.cpu().tolist()
-            text = model.tokenizer.ids_to_text(token_ids)
+            text = stt_model.tokenizer.ids_to_text(token_ids)
             texts.append(text)
         else:
             texts.append("")
@@ -432,13 +453,23 @@ def _process_batch(sessions: list):
             text = session.run_streaming_step(mel_chunk, chunk_length, step_idx)
             session_texts[id(session)] = text
 
-        # step>0: 모델 레벨 배치
+        # step>0: 모델 레벨 배치 — 언어별 그룹핑
         if stepN_items:
-            if len(stepN_items) > 1:
-                logger.info(f"[Batch] Batched inference: {len(stepN_items)} sessions")
-            texts = _batched_stream_step(stepN_items)
-            for (session, _, _, _), text in zip(stepN_items, texts):
-                session_texts[id(session)] = text
+            ko_items = [(s, m, l, idx) for s, m, l, idx in stepN_items if s.detected_language == "ko"]
+            en_items = [(s, m, l, idx) for s, m, l, idx in stepN_items if s.detected_language == "en"]
+
+            if ko_items:
+                if len(ko_items) > 1:
+                    logger.info(f"[Batch] KO inference: {len(ko_items)} sessions")
+                texts = _batched_stream_step(ko_items, stt_model=model)
+                for (session, _, _, _), text in zip(ko_items, texts):
+                    session_texts[id(session)] = text
+            if en_items:
+                if len(en_items) > 1:
+                    logger.info(f"[Batch] EN inference: {len(en_items)} sessions")
+                texts = _batched_stream_step(en_items, stt_model=model_en)
+                for (session, _, _, _), text in zip(en_items, texts):
+                    session_texts[id(session)] = text
 
     # 결과 조립
     results = []
@@ -571,6 +602,38 @@ async def startup():
 
     logger.info("Streaming warmup complete. Ready!")
     logger.info(f"GPU memory: {torch.cuda.memory_allocated() / (1024**3):.2f}GB")
+
+    # English STT 모델 로드
+    global model_en, preprocessor_en, streaming_cfg_en, lang_id_model
+
+    logger.info(f"Loading English STT from {MODEL_PATH_EN}...")
+    model_en = nemo_asr.models.ASRModel.restore_from(MODEL_PATH_EN, map_location="cuda:0")
+    model_en.eval()
+    model_en = model_en.to("cuda:0")
+
+    en_decoding_cfg = model_en.cfg.decoding
+    with open_dict(en_decoding_cfg):
+        en_decoding_cfg.greedy.loop_labels = True
+        en_decoding_cfg.greedy.use_cuda_graph_decoder = False
+    model_en.change_decoding_strategy(en_decoding_cfg)
+
+    model_en.encoder.set_default_att_context_size(ATT_CONTEXT_SIZE)
+    streaming_cfg_en = model_en.encoder.streaming_cfg
+
+    cfg_pre_en = copy.deepcopy(model_en._cfg.preprocessor)
+    OmegaConf.set_struct(cfg_pre_en, False)
+    cfg_pre_en.dither = 0.0
+    cfg_pre_en.pad_to = 0
+    preprocessor_en = model_en.from_config_dict(cfg_pre_en).to("cuda:0").eval()
+
+    logger.info("English STT loaded")
+
+    # LangID 모델 로드
+    logger.info("Loading LangID model...")
+    lang_id_model = nemo_asr.models.EncDecSpeakerLabelModel.from_pretrained("langid_ambernet")
+    lang_id_model = lang_id_model.to("cuda:0")
+    lang_id_model.eval()
+    logger.info(f"LangID loaded ({torch.cuda.memory_allocated()/(1024**3):.2f}GB GPU)")
 
     # 6. 배치 STT 처리기 시작
     global stt_batch
@@ -800,7 +863,8 @@ async def _run_s2s(websocket: WebSocket, user_text: str, utterance_id: int,
 
         async for event in s2s_pipeline.process(user_text, cancel_event=cancel_event,
                                                  audio_context=audio_context,
-                                                 history=history):
+                                                 history=history,
+                                                 language=session.detected_language if session else "ko"):
             etype = event["type"]
 
             if etype == "llm_start":
@@ -914,6 +978,31 @@ async def websocket_endpoint(websocket: WebSocket):
                     logger.info("[History] Reset by user")
                     continue
 
+                # 언어 모드 설정
+                if msg.get("type") == "set_language_mode":
+                    session.language_mode = msg.get("mode", "ko")
+                    if session.language_mode == "ko":
+                        session.detected_language = "ko"
+                        session.lang_detected = True
+                        session._init_caches()
+                        session.reset_for_new_utterance()
+                    else:
+                        session.lang_detected = False
+                    logger.info(f"[Lang] Mode: {session.language_mode}")
+                    continue
+
+                # 수동 언어 전환
+                if msg.get("type") == "set_language":
+                    new_lang = msg.get("language", "ko")
+                    if new_lang in ("ko", "en"):
+                        session.detected_language = new_lang
+                        session.lang_detected = True
+                        session._init_caches()
+                        session.reset_for_new_utterance()
+                        await websocket.send_json({"type": "language_changed", "language": new_lang})
+                        logger.info(f"[Lang] Manual: {new_lang}")
+                    continue
+
             # 바이너리 메시지 (오디오)
             if "bytes" not in message:
                 continue
@@ -953,6 +1042,26 @@ async def websocket_endpoint(websocket: WebSocket):
 
             silence_seconds = session.silence_frames / SAMPLE_RATE
             buffer_seconds = len(session.audio_buffer) / SAMPLE_RATE
+
+            # 언어 감지: 자동 모드에서 첫 발화 시 1회
+            if (session.language_mode == "auto" and not session.lang_detected
+                    and session.is_speaking and len(session.audio_buffer) >= SAMPLE_RATE):
+                detect_audio = session.audio_buffer[-SAMPLE_RATE:]  # 최근 1초
+                with tempfile.NamedTemporaryFile(suffix='.wav', delete=True) as f:
+                    sf.write(f.name, detect_audio, SAMPLE_RATE)
+                    detected = lang_id_model.get_label(f.name)
+                lang = detected if detected in ("ko", "en") else "ko"
+                session.detected_language = lang
+                session.lang_detected = True
+
+                if lang != "ko":
+                    session._init_caches()
+                    session.audio_buffer = np.array([], dtype=np.float32)
+                    session.mel_buffer_idx = 0
+                    session.step = 0
+
+                await websocket.send_json({"type": "language_detected", "language": lang})
+                logger.info(f"[Lang] Detected: {lang}")
 
             # 스트리밍 추론: GPU 스레드에서 가용 청크 처리
             # 무음 구간에서도 추론 계속 (blank_count 업데이트를 위해)
