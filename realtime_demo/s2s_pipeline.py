@@ -196,10 +196,39 @@ class TTSEngine:
         self._loaded = True
         logger.info(f"TTS Engine ({self.engine_type}) ready")
 
+    @staticmethod
+    def _normalize_for_tts(text: str) -> str:
+        """숫자/기호를 한국어 발음으로 변환 (TTS 전처리)."""
+        import re as _re
+
+        # 소수점 + % : "4.0%" → "4점0퍼센트"
+        def _decimal_pct(m):
+            integer, decimal = m.group(1), m.group(2)
+            return f"{integer}점{decimal}퍼센트"
+        text = _re.sub(r'(\d+)\.(\d+)\s*%', _decimal_pct, text)
+
+        # 소수점 (% 없는): "3.14" → "3점14"
+        text = _re.sub(r'(\d+)\.(\d+)', lambda m: f"{m.group(1)}점{m.group(2)}", text)
+
+        # 정수 + % : "50%" → "50퍼센트"
+        text = _re.sub(r'(\d+)\s*%', lambda m: f"{m.group(1)}퍼센트", text)
+
+        # 금액: "1,000,000원" → "1000000원" (쉼표 제거)
+        text = _re.sub(r'(\d),(\d{3})', lambda m: m.group(1) + m.group(2), text)
+        text = _re.sub(r'(\d),(\d{3})', lambda m: m.group(1) + m.group(2), text)  # 2회 (억 단위)
+
+        # 괄호 안 영문 약어: "(ELS)" → "이엘에스" 등은 모델이 처리하므로 스킵
+
+        return text
+
     def synthesize_to_pcm16(self, text: str, language: str = "ko") -> tuple:
         """텍스트 → (PCM int16 bytes, sample_rate)."""
         if not self._loaded:
             self.load()
+
+        # TTS 전처리: 숫자/기호를 한국어 발음으로 변환
+        if language == "ko":
+            text = self._normalize_for_tts(text)
 
         result = self.engine.synthesize(text=text, language=language, speed=1.0)
 
