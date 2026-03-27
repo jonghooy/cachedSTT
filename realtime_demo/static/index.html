@@ -1108,18 +1108,23 @@
             case 'scenario_response':
                 // 시나리오 엔진 응답 표시
                 if (msg.text) {
-                    const resultsList = document.getElementById('results');
+                    const resultsBox = document.getElementById('results-box');
+                    // Clear placeholder if first result
+                    if (resultsBox.querySelector('.placeholder')) {
+                        resultsBox.innerHTML = '';
+                    }
                     const div = document.createElement('div');
-                    div.className = 'result-item scenario-result';
+                    div.style.cssText = 'padding: 10px 14px; margin-bottom: 8px; background: #1a2332; border-left: 3px solid #60a5fa; border-radius: 6px;';
                     const modeLabel = msg.mode === 'scenario' ? '시나리오' : 'Freeform';
-                    const actionBadge = msg.action ? ` <span class="scenario-action">[${msg.action.type}]</span>` : '';
+                    const actionBadge = msg.action ? ` <span style="color: #f59e0b; font-size: 11px; margin-left: 8px;">[${msg.action.type}]</span>` : '';
                     div.innerHTML = `
-                        <div class="result-header">
-                            <span class="scenario-badge">🤖 ${modeLabel}</span>${actionBadge}
+                        <div style="margin-bottom: 4px;">
+                            <span style="background: #1e3a5f; color: #60a5fa; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600;">🤖 ${modeLabel}</span>${actionBadge}
                         </div>
-                        <div class="result-text" style="color: #60a5fa; font-size: 15px; margin-top: 4px;">${msg.text}</div>
+                        <div style="color: #60a5fa; font-size: 15px;">${msg.text}</div>
                     `;
-                    resultsList.insertBefore(div, resultsList.firstChild);
+                    resultsBox.appendChild(div);
+                    resultsBox.scrollTop = resultsBox.scrollHeight;
                 }
                 break;
 

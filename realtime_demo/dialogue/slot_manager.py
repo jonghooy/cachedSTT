@@ -18,8 +18,22 @@ class SlotManager:
         """Extract slot value via regex pattern match."""
         if not slot.pattern:
             return None
-        match = re.search(slot.pattern, text)
-        return match.group(0) if match else None
+        # Strip ^ and $ anchors so pattern matches within text
+        pattern = slot.pattern.strip()
+        if pattern.startswith("^"):
+            pattern = pattern[1:]
+        if pattern.endswith("$"):
+            pattern = pattern[:-1]
+        # Try matching with original text first
+        match = re.search(pattern, text)
+        if match:
+            return match.group(0)
+        # Try with spaces removed (STT often adds spaces between digits)
+        text_no_spaces = text.replace(" ", "")
+        match = re.search(pattern, text_no_spaces)
+        if match:
+            return match.group(0)
+        return None
 
     async def extract_llm(self, slot: SlotDef, text: str) -> str | None:
         """Extract slot value via LLM."""
