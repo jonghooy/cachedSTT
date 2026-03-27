@@ -772,6 +772,14 @@
 
         ws.onopen = async () => {
             try {
+                // 언어 모드 동기화 (녹음 전 토글한 경우)
+                if (languageMode !== 'ko') {
+                    if (languageMode === 'en') {
+                        ws.send(JSON.stringify({type: 'set_language', language: 'en'}));
+                    } else if (languageMode === 'auto') {
+                        ws.send(JSON.stringify({type: 'set_language_mode', mode: 'auto'}));
+                    }
+                }
                 // 마이크 접근
                 mediaStream = await navigator.mediaDevices.getUserMedia({
                     audio: {
