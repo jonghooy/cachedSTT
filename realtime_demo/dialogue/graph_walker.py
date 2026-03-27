@@ -73,6 +73,8 @@ class GraphWalker:
         next_id = self.scenario.get_next_node_id(node.id)
         if next_id:
             state["current_node"] = next_id
+        else:
+            return self._error_result(state, f"Speak node {node.id} has no outgoing edge")
         return DialogueResult(mode="scenario", response_text=text)
 
     async def _handle_slot_collect(self, node: Node, state: dict, user_text: str) -> DialogueResult:
@@ -120,6 +122,8 @@ class GraphWalker:
             next_id = self.scenario.get_next_node_id(node.id)
             if next_id:
                 state["current_node"] = next_id
+            else:
+                return self._error_result(state, f"Condition node {node.id} has no outgoing edge for label={label}")
         return DialogueResult(mode="scenario")
 
     async def _handle_confirm(self, node: Node, state: dict, user_text: str) -> DialogueResult:
@@ -188,13 +192,21 @@ class GraphWalker:
 
         instruction = node.data.get("instruction", "")
         context_slots = {k: state["slots"].get(k) for k in node.data.get("context_slots", [])}
-        rag_context = state["variables"].get("rag_context", "")
+        # Collect any RAG results from variables (stored by rag_search nodes)
+        rag_context = ""
+        for key, val in state["variables"].items():
+            if isinstance(val, list) and val:  # RAG results are lists
+                rag_context += "\n".join(str(r.get("text", r) if isinstance(r, dict) else r) for r in val) + "\n"
 
         prompt = f"지시: {instruction}\n"
         if context_slots:
             prompt += f"슬롯: {context_slots}\n"
         if rag_context:
             prompt += f"참고 문서: {rag_context}\n"
+
+        prosody = state.get("prosody")
+        if prosody:
+            prompt += f"\n고객 음성: 에너지={prosody.get('energy', 'normal')}, 속도={prosody.get('speech_rate', 'normal')}, 추세={prosody.get('energy_trend', 'stable')}"
 
         messages = [
             {"role": "system", "content": "당신은 친절한 한국어 상담원입니다. 1-2문장으로 답변하세요."},

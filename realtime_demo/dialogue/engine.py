@@ -37,7 +37,9 @@ class DialogueEngine:
             match = None
 
         if match and match.confidence >= 0.7:
-            self._enter_scenario(session, match.scenario)
+            success = self._enter_scenario(session, match.scenario)
+            if not success:
+                return DialogueResult(mode="freeform", should_use_s2s=True)
             session["scenario_state"]["prosody"] = prosody
             return await self._execute_scenario_step(session, text)
         else:
@@ -107,19 +109,30 @@ class DialogueEngine:
         except Exception:
             logger.debug("Failed to send execution log (non-critical)")
 
-    def _enter_scenario(self, session: dict, scenario: Scenario):
-        session["dialogue_mode"] = "scenario"
+    def _enter_scenario(self, session: dict, scenario: Scenario) -> bool:
+        start = scenario.get_start_node_id()
+        if start is None:
+            logger.error(f"Scenario {scenario.id} has no nodes, cannot enter")
+            return False
+
         state = session["scenario_state"]
+        # Enforce stack depth limit (max 2 nested scenarios)
+        if len(state.get("stack", [])) >= 2:
+            logger.warning("Scenario nesting limit (2) exceeded, rejecting new scenario")
+            return False
+
+        session["dialogue_mode"] = "scenario"
         state["scenario_id"] = scenario.id
         state["scenario_version"] = scenario.version
-        state["current_node"] = scenario.get_start_node_id()
+        state["current_node"] = start
         state["slots"] = {}
         state["variables"] = {}
         state["history"] = []
         state["retry_count"] = 0
-        state["stack"] = []
+        state["stack"] = state.get("stack", [])
         state["awaiting_confirm"] = False
         state["_scenario_snapshot"] = copy.deepcopy(scenario)
+        return True
 
     def _exit_scenario(self, session: dict):
         state = session["scenario_state"]

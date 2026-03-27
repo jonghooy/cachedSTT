@@ -16,6 +16,8 @@ def _resolve(path: str, context: dict) -> str:
             current = current[part]
         else:
             return ""
+    if current is None:
+        return ""
     return str(current)
 
 
