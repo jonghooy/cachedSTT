@@ -682,14 +682,24 @@ async def startup():
         logging.warning("Could not load scenarios from Knowledge Service — running in freeform-only mode")
 
     slot_manager_d = SlotManager(llm_engine=s2s_pipeline.llm if s2s_pipeline else None)
-    # embed_fn: calls Knowledge Service to embed user text
+    # embed_fn: calls Knowledge Service to embed user text (with LRU cache)
     _embed_client = knowledge_client  # may be None
+    _embed_cache = {}
+    _EMBED_CACHE_MAX = 200
+
     async def _embed_fn(text: str):
+        if text in _embed_cache:
+            return _embed_cache[text]
         if _embed_client is None:
             return np.zeros(1024, dtype=np.float32)
         vec = await _embed_client.embed(text)
         if vec:
-            return np.array(vec, dtype=np.float32)
+            result = np.array(vec, dtype=np.float32)
+            if len(_embed_cache) >= _EMBED_CACHE_MAX:
+                # Remove oldest entry
+                _embed_cache.pop(next(iter(_embed_cache)))
+            _embed_cache[text] = result
+            return result
         return np.zeros(1024, dtype=np.float32)
 
     intent_matcher = IntentMatcher(embed_fn=_embed_fn)

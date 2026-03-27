@@ -48,6 +48,24 @@ class DialogueEngine:
     async def _handle_scenario(self, session: dict, text: str, prosody: dict | None) -> DialogueResult:
         session["scenario_state"]["prosody"] = prosody
         result = await self._execute_scenario_step(session, text)
+
+        # Check for mid-scenario intent switch
+        # If slot extraction failed (awaiting_input + retry), check if user wants something else
+        if result.awaiting_input and session["scenario_state"]["retry_count"] > 0 and text:
+            try:
+                new_match = await self.intent_matcher.match(text)
+                if (new_match and new_match.confidence >= 0.85 and
+                    new_match.scenario_id != session["scenario_state"]["scenario_id"]):
+                    logger.info(f"Mid-scenario intent switch detected: {new_match.scenario_id} (conf={new_match.confidence:.2f})")
+                    # Exit current scenario and enter new one
+                    self._exit_scenario(session)
+                    success = self._enter_scenario(session, new_match.scenario)
+                    if success:
+                        session["scenario_state"]["prosody"] = prosody
+                        return await self._execute_scenario_step(session, text)
+            except Exception:
+                pass  # Intent matching failure is non-critical
+
         if result.action and result.action.get("type") in ("end", "transfer"):
             # Send execution log to Knowledge Service (fire-and-forget)
             await self._log_execution(session, result.action)
