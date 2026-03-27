@@ -87,6 +87,29 @@
             transition: all 0.2s;
         }
         #btn-reset-history:hover { border-color: #38bdf8; color: #38bdf8; }
+        #lang-toggle {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.3rem 0.8rem;
+            border-radius: 6px;
+            border: 1px solid #334155;
+            background: #1e293b;
+            color: #94a3b8;
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        #lang-toggle:hover { border-color: #38bdf8; }
+        #lang-badge {
+            display: inline-block;
+            padding: 0.15rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+        #lang-badge.ko { background: #1e3a5f; color: #60a5fa; }
+        #lang-badge.en { background: #1e3f1e; color: #4ade80; }
         .control-info {
             flex: 1;
         }
@@ -428,6 +451,11 @@
             </div>
             <button id="btn-restart" onclick="restartSession()">RESTART</button>
             <button id="btn-reset-history" onclick="resetHistory()">대화 리셋</button>
+            <div id="lang-toggle" onclick="toggleLanguageMode()">
+                <span>언어:</span>
+                <span id="lang-badge" class="ko">한국어</span>
+                <span id="lang-mode-label">전용</span>
+            </div>
         </div>
 
         <div class="section-label">현재 발화 (Partial)</div>
@@ -689,6 +717,28 @@
         if (ws && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({type: 'reset_history'}));
         }
+    }
+
+    let languageMode = 'ko';
+    let detectedLanguage = 'ko';
+
+    function toggleLanguageMode() {
+        languageMode = languageMode === 'ko' ? 'auto' : 'ko';
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({type: 'set_language_mode', mode: languageMode}));
+        }
+        document.getElementById('lang-mode-label').textContent =
+            languageMode === 'ko' ? '전용' : '자동';
+        if (languageMode === 'ko') {
+            updateLangBadge('ko');
+        }
+    }
+
+    function updateLangBadge(lang) {
+        detectedLanguage = lang;
+        const badge = document.getElementById('lang-badge');
+        badge.className = lang;
+        badge.textContent = lang === 'ko' ? '한국어' : 'English';
     }
 
     async function toggleRecording() {
@@ -1017,6 +1067,14 @@
                     if (isRecording) histStatus.textContent = '녹음 중...';
                     else histStatus.textContent = '마이크 버튼을 눌러 시작';
                 }, 2000);
+                break;
+
+            case 'language_detected':
+                updateLangBadge(msg.language);
+                break;
+
+            case 'language_changed':
+                updateLangBadge(msg.language);
                 break;
         }
     }
