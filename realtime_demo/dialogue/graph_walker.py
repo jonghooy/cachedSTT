@@ -15,10 +15,11 @@ MAX_AUTO_ADVANCE = 20
 
 
 class GraphWalker:
-    def __init__(self, scenario: Scenario, slot_manager, llm_engine=None):
+    def __init__(self, scenario: Scenario, slot_manager, llm_engine=None, knowledge_client=None):
         self.scenario = scenario
         self.slot_manager = slot_manager
         self.llm_engine = llm_engine
+        self._knowledge_client = knowledge_client
 
     async def step(self, state: dict, user_text: str) -> DialogueResult:
         collected_text_parts: list[str] = []
@@ -155,16 +156,24 @@ class GraphWalker:
         return DialogueResult(mode="scenario", action=action)
 
     async def _handle_rag_search(self, node: Node, state: dict, user_text: str) -> DialogueResult:
+        """RAG search: execute via action_runner's knowledge_client, store result, auto-advance."""
         ctx = {"slots": state["slots"], "variables": state["variables"]}
         query = render_template(node.data.get("query_template", ""), ctx)
         result_var = node.data.get("result_var")
+        top_k = node.data.get("top_k", 3)
+
+        # Try to execute RAG search if knowledge_client available via slot_manager or engine
+        # For now, store the query for the engine to execute
         if result_var:
-            state["variables"][f"_pending_rag_{result_var}"] = {
-                "query": query,
-                "top_k": node.data.get("top_k", 3),
-                "result_var": result_var,
-                "inject_to_next_llm": node.data.get("inject_to_next_llm", False),
-            }
+            state["variables"][result_var] = []  # default empty
+            # Attempt search if we have a reference to knowledge_client
+            if hasattr(self, '_knowledge_client') and self._knowledge_client:
+                try:
+                    results = await self._knowledge_client.search(query, top_k)
+                    state["variables"][result_var] = results
+                except Exception:
+                    logger.warning(f"RAG search failed for query: {query}")
+
         next_id = self.scenario.get_next_node_id(node.id)
         if next_id:
             state["current_node"] = next_id
@@ -256,7 +265,35 @@ class GraphWalker:
         return True
 
     async def _llm_condition(self, node: Node, state: dict, user_text: str) -> str:
-        return "false"
+        """Evaluate condition via LLM. Returns branch label string."""
+        if not self.llm_engine:
+            return node.data.get("default_branch", "false")
+
+        instruction = node.data.get("instruction", "")
+        branches = []
+        for e in self.scenario.get_outgoing_edges(node.id):
+            if e.label:
+                branches.append(e.label)
+
+        ctx = {"slots": state["slots"], "variables": state["variables"]}
+        prompt = f"상황: {instruction}\n슬롯: {ctx['slots']}\n사용자 발화: {user_text}\n선택지: {branches}\n위 상황에서 적절한 선택지를 하나만 출력하세요."
+
+        messages = [
+            {"role": "system", "content": "You are a decision assistant. Output ONLY the chosen branch label, nothing else."},
+            {"role": "user", "content": prompt},
+        ]
+
+        try:
+            result_text = ""
+            async for token in self.llm_engine.generate_stream(messages, max_tokens=10, temperature=0.0):
+                result_text += token
+            result_text = result_text.strip()
+            if result_text in branches:
+                return result_text
+            return node.data.get("default_branch", branches[0] if branches else "false")
+        except Exception:
+            logger.exception("LLM condition evaluation failed")
+            return node.data.get("default_branch", "false")
 
     def _error_result(self, state: dict, msg: str) -> DialogueResult:
         logger.error(msg)

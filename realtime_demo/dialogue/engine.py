@@ -47,6 +47,8 @@ class DialogueEngine:
         session["scenario_state"]["prosody"] = prosody
         result = await self._execute_scenario_step(session, text)
         if result.action and result.action.get("type") in ("end", "transfer"):
+            # Send execution log to Knowledge Service (fire-and-forget)
+            await self._log_execution(session, result.action)
             self._exit_scenario(session)
         return result
 
@@ -57,8 +59,53 @@ class DialogueEngine:
             logger.error("No scenario snapshot in session")
             self._exit_scenario(session)
             return DialogueResult(should_use_s2s=True)
-        walker = GraphWalker(scenario, self.slot_manager, self.llm_engine)
-        return await walker.step(state, text)
+        walker = GraphWalker(scenario, self.slot_manager, self.llm_engine,
+                             knowledge_client=self.action_runner.knowledge_client if self.action_runner else None)
+        result = await walker.step(state, text)
+
+        # Execute api_call action inline and continue walking
+        if result.action and result.action.get("type") == "api_call" and self.action_runner:
+            api_result = await self.action_runner.execute_api_call(result.action, state)
+            if api_result is None and result.action.get("on_error"):
+                # API failed → route to on_error node
+                state["current_node"] = result.action["on_error"]
+                # Continue walking from error node
+                error_result = await walker.step(state, "")
+                if error_result.response_text:
+                    result.response_text = (result.response_text or "") + " " + error_result.response_text
+                    result.response_text = result.response_text.strip()
+                result.action = error_result.action
+            else:
+                # API succeeded → continue walking from current node (already advanced by api_call handler)
+                continue_result = await walker.step(state, "")
+                if continue_result.response_text:
+                    result.response_text = (result.response_text or "") + " " + continue_result.response_text
+                    result.response_text = result.response_text.strip()
+                if continue_result.action:
+                    result.action = continue_result.action
+                if continue_result.awaiting_input:
+                    result.awaiting_input = True
+
+        return result
+
+    async def _log_execution(self, session: dict, action: dict):
+        """Send scenario execution log to Knowledge Service (non-blocking)."""
+        if not self.action_runner or not self.action_runner.knowledge_client:
+            return
+        state = session["scenario_state"]
+        try:
+            client = self.action_runner.knowledge_client._client
+            await client.post("/log-execution", json={
+                "scenario_id": state.get("scenario_id", 0),
+                "session_id": f"ws_{id(session)}",
+                "completed": action.get("type") == "end",
+                "nodes_visited": state.get("history", []),
+                "slots_filled": state.get("slots", {}),
+                "duration_sec": 0,  # TODO: track actual duration
+                "exit_reason": action.get("type", "unknown"),
+            })
+        except Exception:
+            logger.debug("Failed to send execution log (non-critical)")
 
     def _enter_scenario(self, session: dict, scenario: Scenario):
         session["dialogue_mode"] = "scenario"
