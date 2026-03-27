@@ -40,6 +40,9 @@ LLM_TOP_P = 0.9
 # ── TTS 설정 ──
 TTS_SAMPLE_RATE = 24000
 TTS_REF_AUDIO = "/home/jonghooy/work/zhisper/tts/voices/styletts2/00003.wav"
+TTS_REF_AUDIO_EN = "/home/jonghooy/work/zhisper/styletts2_korean/Models/LibriTTS_EN/reference_audio/reference_audio/4077-13754-0000.wav"
+STYLETTS2_EN_CONFIG = "/home/jonghooy/work/zhisper/styletts2_korean/Models/LibriTTS_EN/Vocos/LibriTTS/config_libritts_vocos.yml"
+STYLETTS2_EN_MODEL = "/home/jonghooy/work/zhisper/styletts2_korean/Models/LibriTTS_EN/Vocos/LibriTTS/epoch_2nd_00029.pth"
 
 # ── 시스템 프롬프트 ──
 SYSTEM_PROMPT = """당신은 친절하고 전문적인 한국어 콜센터 상담원입니다.
@@ -55,6 +58,20 @@ SYSTEM_PROMPT = """당신은 친절하고 전문적인 한국어 콜센터 상�
 - anxiety: 안심 + 안내
 - neutral: 친절하게 답변
 - satisfaction/joy: 감사 + 밝게 응대"""
+
+SYSTEM_PROMPT_EN = """You are a friendly and professional call center agent.
+
+Absolute rules:
+1. Start with [EMOTION:anger|anxiety|neutral|satisfaction|joy] tag on the first line.
+2. Keep your response to 1-2 sentences maximum. Never exceed 2 sentences.
+3. Use natural conversational English since this will be read by TTS.
+4. Do not use markdown, asterisks, brackets or special formatting.
+
+Emotion guidelines:
+- anger: Apologize + immediate resolution
+- anxiety: Reassure + guide
+- neutral: Answer kindly
+- satisfaction/joy: Thank + respond warmly"""
 
 import re as _re_mod
 EMOTION_TAG_PATTERN = _re_mod.compile(r'\[EMOTION:(anger|anxiety|neutral|satisfaction|joy)\]')
@@ -138,9 +155,13 @@ class LLMEngine:
 class TTSEngine:
     """TTS 엔진 래퍼 — Edge TTS (클라우드) 또는 StyleTTS2 (로컬) 지원."""
 
-    def __init__(self, device: str = "cuda:0", engine_type: str = TTS_ENGINE_TYPE):
+    def __init__(self, device: str = "cuda:0", engine_type: str = TTS_ENGINE_TYPE,
+                 config_path: str = None, model_path: str = None, ref_audio_path: str = None):
         self.device = device
         self.engine_type = engine_type
+        self._config_path = config_path
+        self._model_path = model_path
+        self._ref_audio_path = ref_audio_path
         self.engine = None
         self._loaded = False
 
@@ -161,11 +182,14 @@ class TTSEngine:
             if ZHISPER_TTS_PATH not in sys.path:
                 sys.path.insert(0, ZHISPER_TTS_PATH)
             from tts.engine.styletts2_engine import StyleTTS2Engine
+            config = self._config_path or os.path.join(STYLETTS2_PATH, "Models/KB_60h/config_ko_finetune_KB_60h.yml")
+            model_file = self._model_path or os.path.join(STYLETTS2_PATH, "Models/KB_60h/epoch_2nd_00034.pth")
+            ref = self._ref_audio_path or TTS_REF_AUDIO
             self.engine = StyleTTS2Engine(
                 device=self.device,
-                config_path=os.path.join(STYLETTS2_PATH, "Models/KB_60h/config_ko_finetune_KB_60h.yml"),
-                model_path=os.path.join(STYLETTS2_PATH, "Models/KB_60h/epoch_2nd_00034.pth"),
-                ref_audio_path=TTS_REF_AUDIO,
+                config_path=config,
+                model_path=model_file,
+                ref_audio_path=ref,
             )
             self.engine.load()
 
@@ -262,7 +286,11 @@ class S2SPipeline:
 
     def __init__(self, device: str = "cuda:0", knowledge_client=None):
         self.llm = LLMEngine()
-        self.tts = TTSEngine(device=device)
+        self.tts = TTSEngine(device=device)  # Korean TTS (default)
+        self.tts_en = TTSEngine(device=device, engine_type="styletts2",
+                                config_path=STYLETTS2_EN_CONFIG,
+                                model_path=STYLETTS2_EN_MODEL,
+                                ref_audio_path=TTS_REF_AUDIO_EN)  # English TTS
         self.knowledge_client = knowledge_client
         self._loaded = False
 
@@ -271,9 +299,10 @@ class S2SPipeline:
         if self._loaded:
             return
         self.tts.load()
+        self.tts_en.load()
         self.llm.load()
         self._loaded = True
-        logger.info("S2S Pipeline ready (LLM: vLLM API, TTS: StyleTTS2)")
+        logger.info("S2S Pipeline ready (LLM: vLLM API, TTS: KO+EN StyleTTS2)")
 
     async def _generate_with_retry(self, messages, truncated, system_prompt, user_msg):
         """LLM 스트리밍 생성. context 초과 시 히스토리 절반으로 1회 재시도."""
@@ -300,12 +329,14 @@ class S2SPipeline:
         cancel_event: asyncio.Event = None,
         audio_context: dict = None,
         history: list = None,
+        language: str = "ko",
     ) -> AsyncGenerator[dict, None]:
         """STT Final 텍스트를 받아 LLM 응답 + TTS 음성을 스트리밍 생성.
 
         Args:
             cancel_event: set되면 즉시 생성 중단 (barge-in).
             audio_context: 프로소디 정보 {"energy", "speech_rate", "energy_trend"}
+            language: "ko" (Korean) or "en" (English) — selects system prompt and TTS.
 
         Yields:
             {"type": "llm_start"}
@@ -320,13 +351,21 @@ class S2SPipeline:
         def _cancelled():
             return cancel_event is not None and cancel_event.is_set()
 
+        # 언어별 시스템 프롬프트
+        if language == "en":
+            system_prompt = SYSTEM_PROMPT_EN
+        # else: use the default SYSTEM_PROMPT (Korean), which may be overridden by Knowledge below
+
+        # Select active TTS engine based on language
+        active_tts = self.tts_en if language == "en" else self.tts
+
         # Truncate history for context management
         truncated = _truncate_history(history or [])
         rag_top_k = _get_rag_top_k(truncated)
 
-        # Use Knowledge service prompt + RAG search if available
+        # Use Knowledge service prompt + RAG search if available (Korean only)
         knowledge_ctx = ""
-        if self.knowledge_client and self.knowledge_client.is_loaded():
+        if language != "en" and self.knowledge_client and self.knowledge_client.is_loaded():
             kb_prompt = self.knowledge_client.get_system_prompt()
             if kb_prompt:
                 system_prompt = kb_prompt
@@ -435,7 +474,7 @@ class S2SPipeline:
                     yield {"type": "tts_start", "sentence": chunk_text}
 
                     pcm_bytes, sr = await loop.run_in_executor(
-                        None, self.tts.synthesize_to_pcm16, chunk_text
+                        None, active_tts.synthesize_to_pcm16, chunk_text
                     )
 
                     if _cancelled():
@@ -461,7 +500,7 @@ class S2SPipeline:
             yield {"type": "tts_start", "sentence": remaining}
 
             pcm_bytes, sr = await loop.run_in_executor(
-                None, self.tts.synthesize_to_pcm16, remaining
+                None, active_tts.synthesize_to_pcm16, remaining
             )
 
             if not _cancelled():
@@ -496,4 +535,5 @@ class S2SPipeline:
     def unload(self):
         self.llm.unload()
         self.tts.unload()
+        self.tts_en.unload()
         self._loaded = False
