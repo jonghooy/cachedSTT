@@ -723,14 +723,24 @@
     let detectedLanguage = 'ko';
 
     function toggleLanguageMode() {
-        languageMode = languageMode === 'ko' ? 'auto' : 'ko';
+        // 3모드 순환: ko → en → auto → ko
+        if (languageMode === 'ko') languageMode = 'en';
+        else if (languageMode === 'en') languageMode = 'auto';
+        else languageMode = 'ko';
+
         if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({type: 'set_language_mode', mode: languageMode}));
+            if (languageMode === 'ko' || languageMode === 'en') {
+                // 고정 언어 모드: set_language로 강제 전환
+                ws.send(JSON.stringify({type: 'set_language', language: languageMode}));
+            } else {
+                // 자동 감지 모드
+                ws.send(JSON.stringify({type: 'set_language_mode', mode: 'auto'}));
+            }
         }
-        document.getElementById('lang-mode-label').textContent =
-            languageMode === 'ko' ? '전용' : '자동';
-        if (languageMode === 'ko') {
-            updateLangBadge('ko');
+        const labels = {ko: '전용', en: '전용', auto: '자동'};
+        document.getElementById('lang-mode-label').textContent = labels[languageMode];
+        if (languageMode !== 'auto') {
+            updateLangBadge(languageMode);
         }
     }
 

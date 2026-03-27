@@ -287,10 +287,7 @@ class S2SPipeline:
     def __init__(self, device: str = "cuda:0", knowledge_client=None):
         self.llm = LLMEngine()
         self.tts = TTSEngine(device=device)  # Korean TTS (default)
-        self.tts_en = TTSEngine(device=device, engine_type="styletts2",
-                                config_path=STYLETTS2_EN_CONFIG,
-                                model_path=STYLETTS2_EN_MODEL,
-                                ref_audio_path=TTS_REF_AUDIO_EN)  # English TTS
+        self.tts_en = TTSEngine(device=device, engine_type="edge")  # English TTS (Edge TTS cloud)
         self.knowledge_client = knowledge_client
         self._loaded = False
 
