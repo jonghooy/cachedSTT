@@ -106,6 +106,66 @@ class DialogueEngine:
                 if continue_result.awaiting_input:
                     result.awaiting_input = True
 
+        # Handle intent_route action — match intent and enter sub-scenario
+        if result.action and result.action.get("type") == "intent_route":
+            user_text = result.action.get("user_text", "")
+            try:
+                match = await self.intent_matcher.match(user_text)
+            except Exception:
+                match = None
+
+            if match and match.confidence >= 0.7 and match.scenario_id != state.get("scenario_id"):
+                # Push current scenario to stack and enter sub-scenario
+                import copy as _copy
+                if len(state.get("stack", [])) < 3:  # depth limit
+                    parent_state = _copy.deepcopy(state)
+                    # Set next node for when we return
+                    parent_state["current_node"] = result.action.get("next_node") or state["current_node"]
+                    state["stack"] = [parent_state]
+
+                    # Enter sub-scenario
+                    sub_scenario = match.scenario
+                    state["scenario_id"] = sub_scenario.id
+                    state["scenario_version"] = sub_scenario.version
+                    state["current_node"] = sub_scenario.get_start_node_id()
+                    state["slots"] = {}
+                    state["variables"] = {}
+                    state["history"] = []
+                    state["retry_count"] = 0
+                    state["awaiting_confirm"] = False
+                    state["_scenario_snapshot"] = _copy.deepcopy(sub_scenario)
+
+                    # Execute first step of sub-scenario
+                    walker = GraphWalker(sub_scenario, self.slot_manager, self.llm_engine,
+                                        knowledge_client=self.action_runner.knowledge_client if self.action_runner else None)
+                    sub_result = await walker.step(state, user_text)
+                    if sub_result.response_text:
+                        result.response_text = (result.response_text or "") + " " + sub_result.response_text
+                        result.response_text = result.response_text.strip()
+                    result.action = sub_result.action
+                    result.awaiting_input = sub_result.awaiting_input
+                else:
+                    # Stack full — use no_match message
+                    no_match_msg = result.action.get("no_match_message", "")
+                    result.action = None
+                    result.response_text = no_match_msg
+                    result.awaiting_input = True
+            else:
+                # No match — check no_match counter
+                no_match_key = "_intent_route_no_match"
+                state["variables"][no_match_key] = state["variables"].get(no_match_key, 0) + 1
+                max_no = result.action.get("max_no_match", 3)
+
+                if state["variables"][no_match_key] >= max_no:
+                    # Too many no-matches — transfer to agent
+                    result.action = {"type": "transfer", "reason": "intent_route_no_match"}
+                    result.response_text = "정확한 도움을 드리기 위해 상담원에게 연결해드리겠습니다."
+                else:
+                    no_match_msg = result.action.get("no_match_message", "다시 말씀해주세요.")
+                    result.action = None
+                    result.response_text = no_match_msg
+                    result.awaiting_input = True
+
         return result
 
     async def _log_execution(self, session: dict, action: dict):
@@ -134,9 +194,9 @@ class DialogueEngine:
             return False
 
         state = session["scenario_state"]
-        # Enforce stack depth limit (max 2 nested scenarios)
-        if len(state.get("stack", [])) >= 2:
-            logger.warning("Scenario nesting limit (2) exceeded, rejecting new scenario")
+        # Enforce stack depth limit (max 3 nested scenarios: main → sub → sub-switch)
+        if len(state.get("stack", [])) >= 3:
+            logger.warning("Scenario nesting limit (3) exceeded, rejecting new scenario")
             return False
 
         session["dialogue_mode"] = "scenario"
@@ -169,3 +229,22 @@ class DialogueEngine:
         state["retry_count"] = 0
         state["awaiting_confirm"] = False
         state["_scenario_snapshot"] = None
+
+    async def auto_enter_main(self, session: dict) -> DialogueResult | None:
+        """Auto-enter main scenario on new call. Called by server.py on WebSocket connect."""
+        # Find main scenario
+        main = None
+        for s in self.scenario_cache.scenarios.values():
+            # Check is_main flag (set via Knowledge Service)
+            if getattr(s, '_is_main', False):
+                main = s
+                break
+
+        if main is None:
+            return None
+
+        success = self._enter_scenario(session, main)
+        if not success:
+            return None
+
+        return await self._execute_scenario_step(session, "")

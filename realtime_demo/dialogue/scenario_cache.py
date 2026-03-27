@@ -28,6 +28,7 @@ class ScenarioCache:
                 # Map Knowledge Service field names to Scenario.from_dict expected format
                 mapped = self._map_knowledge_fields(data)
                 scenario = Scenario.from_dict(mapped)
+                scenario._is_main = bool(data.get("is_main", 0))
                 if scenario.status == "active":
                     self.scenarios[scenario.id] = scenario
             except Exception:

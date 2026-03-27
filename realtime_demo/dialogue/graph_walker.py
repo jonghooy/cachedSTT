@@ -230,6 +230,34 @@ class GraphWalker:
             state["current_node"] = next_id
         return DialogueResult(mode="scenario", response_text=response)
 
+    async def _handle_intent_route(self, node: Node, state: dict, user_text: str) -> DialogueResult:
+        """Intent routing node: wait for user input, match intent, enter sub-scenario.
+
+        If no user_text, prompt the user.
+        If user_text provided, try intent matching.
+        If match found, return special action for engine to handle sub-scenario entry.
+        If no match, increment no_match counter and retry or transfer.
+        """
+        prompt = node.data.get("prompt", "무엇을 도와드릴까요?")
+        no_match_msg = node.data.get("no_match_message", "죄송합니다. 다시 한번 말씀해주시겠어요?")
+        max_no_match = node.data.get("max_no_match", 3)
+
+        if not user_text:
+            return DialogueResult(mode="scenario", response_text=prompt, awaiting_input=True)
+
+        # Try intent matching via engine (will be handled by engine)
+        return DialogueResult(
+            mode="scenario",
+            action={
+                "type": "intent_route",
+                "user_text": user_text,
+                "no_match_message": no_match_msg,
+                "max_no_match": max_no_match,
+                "next_node": self.scenario.get_next_node_id(node.id),
+            },
+            awaiting_input=False,
+        )
+
     async def _handle_transfer(self, node: Node, state: dict, user_text: str) -> DialogueResult:
         text = node.data.get("message", "상담원에게 연결해드리겠습니다.")
         transfer_data = node.data.get("transfer_data", {})
