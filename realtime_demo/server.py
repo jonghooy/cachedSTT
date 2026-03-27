@@ -620,7 +620,6 @@ async def startup():
 
     slot_manager_d = SlotManager(llm_engine=s2s_pipeline.llm if s2s_pipeline else None)
     # embed_fn: calls Knowledge Service to embed user text
-    import numpy as np
     _embed_client = knowledge_client  # may be None
     async def _embed_fn(text: str):
         if _embed_client is None:
@@ -647,6 +646,25 @@ async def startup():
         action_runner=action_runner,
     )
     logging.info(f"DialogueEngine initialized with {len(scenario_cache.scenarios)} scenarios")
+
+    # 10. vLLM 워밍업 (콜드스타트 방지: CUDA 커널 컴파일 + prefix cache)
+    if S2S_ENABLED and s2s_pipeline and s2s_pipeline.llm.is_loaded():
+        try:
+            logger.info("vLLM warmup: sending dummy request...")
+            warmup_system = s2s_pipeline.knowledge_client.get_system_prompt() if (
+                s2s_pipeline.knowledge_client and s2s_pipeline.knowledge_client.is_loaded()
+            ) else "당신은 친절한 상담원입니다."
+            warmup_messages = [
+                {"role": "system", "content": warmup_system},
+                {"role": "user", "content": "고객: 안녕하세요"},
+            ]
+            t_warmup = time.time()
+            async for _ in s2s_pipeline.llm.generate_stream(warmup_messages, max_tokens=5):
+                pass
+            warmup_ms = (time.time() - t_warmup) * 1000
+            logger.info(f"vLLM warmup done in {warmup_ms:.0f}ms (prefix cached)")
+        except Exception as e:
+            logger.warning(f"vLLM warmup failed: {e}")
 
 
 @app.get("/")
