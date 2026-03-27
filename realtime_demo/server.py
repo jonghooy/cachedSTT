@@ -1326,32 +1326,21 @@ async def websocket_endpoint(websocket: WebSocket):
                             if s2s_pipeline and s2s_pipeline.tts and s2s_pipeline.tts.is_loaded():
                                 try:
                                     import base64
-                                    import re as _re_tts
                                     loop = asyncio.get_event_loop()
-                                    # Split response into sentences for incremental TTS
-                                    sentences = _re_tts.split(r'(?<=[.?!。]) ', d_result.response_text)
-                                    if not sentences:
-                                        sentences = [d_result.response_text]
-                                    for sent_idx, sentence in enumerate(sentences):
-                                        if not sentence.strip():
-                                            continue
-                                        # Check barge-in: if new audio arrived, skip remaining TTS
-                                        if session.is_speaking:
-                                            logger.info("[Scenario TTS] Barge-in detected, stopping TTS")
-                                            break
-                                        pcm_bytes, sr = await loop.run_in_executor(
-                                            gpu_executor,
-                                            s2s_pipeline.tts.synthesize_to_pcm16,
-                                            sentence,
-                                        )
-                                        if pcm_bytes:
-                                            await websocket.send_json({
-                                                "type": "tts_audio",
-                                                "audio": base64.b64encode(pcm_bytes).decode(),
-                                                "sample_rate": sr,
-                                                "sentence": sentence,
-                                                "sentence_idx": sent_idx,
-                                            })
+                                    pcm_bytes, sr = await loop.run_in_executor(
+                                        gpu_executor,
+                                        s2s_pipeline.tts.synthesize_to_pcm16,
+                                        d_result.response_text,
+                                    )
+                                    if pcm_bytes:
+                                        await websocket.send_json({
+                                            "type": "tts_audio",
+                                            "audio": base64.b64encode(pcm_bytes).decode(),
+                                            "sample_rate": sr,
+                                            "sentence": d_result.response_text,
+                                            "sentence_idx": 0,
+                                        })
+                                        logger.info(f"[Scenario TTS] Sent {len(pcm_bytes)} bytes")
                                 except Exception as e:
                                     logger.warning(f"Scenario TTS failed: {e}")
                         session.reset_for_new_utterance(keep_tail_seconds=0.5)
