@@ -1091,25 +1091,29 @@ async def websocket_endpoint(websocket: WebSocket):
             silence_seconds = session.silence_frames / SAMPLE_RATE
             buffer_seconds = len(session.audio_buffer) / SAMPLE_RATE
 
-            # 언어 감지: 자동 모드에서 첫 발화 시 1회
+            # 언어 감지: 자동 모드에서 음성이 충분히 쌓였을 때 1회
             if (session.language_mode == "auto" and not session.lang_detected
-                    and session.is_speaking and len(session.audio_buffer) >= SAMPLE_RATE):
-                detect_audio = session.audio_buffer[-SAMPLE_RATE:]  # 최근 1초
-                with tempfile.NamedTemporaryFile(suffix='.wav', delete=True) as f:
-                    sf.write(f.name, detect_audio, SAMPLE_RATE)
-                    detected = lang_id_model.get_label(f.name)
-                lang = detected if detected in ("ko", "en") else "ko"
-                session.detected_language = lang
-                session.lang_detected = True
+                    and session.is_speaking and len(session.audio_buffer) >= SAMPLE_RATE * 3):
+                # 최근 에너지에서 실제 음성 구간이 충분한지 확인
+                energy_chunks = session.energy_history[-12:]  # 최근 ~3초
+                voiced_count = sum(1 for e in energy_chunks if e > session.noise_threshold)
+                if voiced_count >= 4:  # 음성이 4청크(~1초) 이상
+                    detect_audio = session.audio_buffer[-int(SAMPLE_RATE * 2):]
+                    with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as f:
+                        sf.write(f.name, detect_audio, SAMPLE_RATE)
+                        detected = lang_id_model.get_label(f.name)
+                    import os; os.unlink(f.name)
+                    lang = detected if detected in ("ko", "en") else "ko"
+                    session.detected_language = lang
+                    session.lang_detected = True
+                    logger.info(f"[Lang] Detected: {lang} (voiced={voiced_count}/12, {len(detect_audio)/SAMPLE_RATE:.1f}s)")
 
-                if lang != "ko":
-                    session._init_caches()
-                    session.audio_buffer = np.array([], dtype=np.float32)
-                    session.mel_buffer_idx = 0
-                    session.step = 0
+                    if lang != "ko":
+                        session._init_caches()
+                        session.mel_buffer_idx = 0
+                        session.step = 0
 
-                await websocket.send_json({"type": "language_detected", "language": lang})
-                logger.info(f"[Lang] Detected: {lang}")
+                    await websocket.send_json({"type": "language_detected", "language": lang})
 
             # 스트리밍 추론: GPU 스레드에서 가용 청크 처리
             # 무음 구간에서도 추론 계속 (blank_count 업데이트를 위해)
@@ -1230,8 +1234,9 @@ async def websocket_endpoint(websocket: WebSocket):
                 # 1) 텍스트 너무 짧음 (한글 4자 미만 = 의미 없는 조각)
                 # 2) 발화 대비 텍스트 밀도 너무 낮음 (긴 버퍼에 짧은 텍스트 = 노이즈)
                 # 3) 평균 에너지가 너무 낮음 (원거리 대화)
-                korean_chars = len(_re.findall(r'[\uac00-\ud7a3]', session.last_text))
-                text_density = korean_chars / max(buffer_seconds, 0.1)  # 초당 한글 글자 수
+                # 한글 또는 영문 글자 수로 밀도 계산 (다국어 지원)
+                text_chars = len(_re.findall(r'[\uac00-\ud7a3a-zA-Z]', session.last_text))
+                text_density = text_chars / max(buffer_seconds, 0.1)
                 # 에너지: 전체 버퍼가 아닌 최근 5초 구간만 사용 (TTS 재생 중 무음 희석 방지)
                 recent_energy = session.energy_history[-20:] if len(session.energy_history) > 20 else session.energy_history  # ~5초 (250ms 청크 × 20)
                 avg_energy = sum(recent_energy) / max(len(recent_energy), 1)

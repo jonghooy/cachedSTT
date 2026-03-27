@@ -739,7 +739,12 @@
         }
         const labels = {ko: '전용', en: '전용', auto: '자동'};
         document.getElementById('lang-mode-label').textContent = labels[languageMode];
-        if (languageMode !== 'auto') {
+        if (languageMode === 'auto') {
+            // 자동 모드: 배지를 "자동 감지" 표시
+            const badge = document.getElementById('lang-badge');
+            badge.className = '';
+            badge.textContent = '자동 감지';
+        } else {
             updateLangBadge(languageMode);
         }
     }
