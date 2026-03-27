@@ -1056,15 +1056,53 @@ async def websocket_endpoint(websocket: WebSocket):
                 # 대화 모드 전환 (시나리오 ↔ 일반 S2S)
                 if msg.get("type") == "set_mode":
                     new_mode = msg.get("mode", "scenario")
-                    session.dialogue_mode = "freeform" if new_mode == "freeform" else "freeform"
+                    # Reset scenario state completely
+                    session.dialogue_mode = "freeform"
                     session.scenario_state = {
                         "scenario_id": None, "scenario_version": None, "current_node": None,
                         "slots": {}, "variables": {}, "history": [], "retry_count": 0,
                         "prosody": None, "stack": [], "awaiting_confirm": False,
                         "_scenario_snapshot": None,
                     }
-                    session._skip_dialogue_engine = (new_mode == "freeform")
-                    logger.info(f"[Mode] Switched to: {new_mode}")
+                    if new_mode == "freeform":
+                        session._skip_dialogue_engine = True
+                        logger.info("[Mode] Switched to: freeform (S2S only)")
+                    else:
+                        session._skip_dialogue_engine = False
+                        # Re-enter main scenario
+                        if dialogue_engine:
+                            ds = session.get_dialogue_session()
+                            main_result = await dialogue_engine.auto_enter_main(ds)
+                            session.sync_dialogue_session(ds)
+                            if main_result and main_result.response_text:
+                                await websocket.send_json({
+                                    "type": "scenario_response",
+                                    "text": main_result.response_text,
+                                    "mode": "scenario",
+                                    "action": main_result.action,
+                                    "utterance_id": 0,
+                                })
+                                # TTS for greeting
+                                if s2s_pipeline and s2s_pipeline.tts and s2s_pipeline.tts.is_loaded():
+                                    try:
+                                        import base64
+                                        loop = asyncio.get_event_loop()
+                                        pcm_bytes, sr = await loop.run_in_executor(
+                                            gpu_executor,
+                                            s2s_pipeline.tts.synthesize_to_pcm16,
+                                            main_result.response_text,
+                                        )
+                                        if pcm_bytes:
+                                            await websocket.send_json({
+                                                "type": "tts_audio",
+                                                "audio": base64.b64encode(pcm_bytes).decode(),
+                                                "sample_rate": sr,
+                                                "sentence": main_result.response_text,
+                                                "sentence_idx": 0,
+                                            })
+                                    except Exception:
+                                        pass
+                        logger.info("[Mode] Switched to: scenario (main scenario entered)")
                     await websocket.send_json({"type": "mode_changed", "mode": new_mode})
                     continue
                 # 대화 히스토리 리셋
