@@ -46,6 +46,14 @@ class ActionRunner:
         timeout_ms = action.get("timeout_ms", 5000)
         result_var = action.get("result_var")
 
+        _ALLOWED_METHODS = {"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD"}
+        if method.upper() not in _ALLOWED_METHODS:
+            logger.error(f"Invalid HTTP method: {method}")
+            return None
+        if url and not url.startswith(("http://", "https://")):
+            logger.error(f"Invalid API URL (must be HTTP/HTTPS): {url}")
+            return None
+
         try:
             async with httpx.AsyncClient(timeout=timeout_ms / 1000) as client:
                 resp = await client.request(

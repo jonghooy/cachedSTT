@@ -35,7 +35,7 @@ class TestCosineSimilarity:
 
 class TestIntentMatcher:
     def test_match_top_k(self):
-        matcher = IntentMatcher(embed_fn=None, llm_engine=None)
+        matcher = IntentMatcher(embed_fn=None)
         scenarios = _make_scenarios()
         matcher.load_trigger_cache(scenarios)
         assert len(matcher._trigger_cache) == 5
@@ -44,7 +44,7 @@ class TestIntentMatcher:
     async def test_no_match_below_threshold(self):
         async def mock_embed(text):
             return np.random.randn(16).astype(np.float32) * 100
-        matcher = IntentMatcher(embed_fn=mock_embed, llm_engine=None)
+        matcher = IntentMatcher(embed_fn=mock_embed)
         matcher.load_trigger_cache(_make_scenarios())
         result = await matcher.match("오늘 날씨가 좋네요")
         assert result is None or result.confidence < 0.5

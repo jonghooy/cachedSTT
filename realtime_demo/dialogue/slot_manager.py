@@ -52,6 +52,7 @@ class SlotManager:
             # Validate enum values
             if slot.type == "enum" and slot.values:
                 if result_text not in slot.values:
+                    logger.warning(f"LLM slot extraction: '{result_text}' not in enum {slot.values} for slot '{slot.name}'")
                     return None
 
             # Validate boolean

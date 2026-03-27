@@ -10,6 +10,8 @@ _TEMPLATE_RE = re.compile(r"\{\{(\w+(?:\.\w+)*)\}\}")
 def _resolve(path: str, context: dict) -> str:
     """Resolve dotted path from context, return empty string if missing."""
     parts = path.split(".")
+    if not all(p.replace("_", "").isalnum() for p in parts):
+        return ""
     current = context
     for part in parts:
         if isinstance(current, dict) and part in current:

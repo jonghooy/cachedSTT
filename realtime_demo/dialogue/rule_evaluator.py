@@ -14,9 +14,14 @@ class _MissingSentinel:
 _MISSING = _MissingSentinel()
 
 
+_ALLOWED_ROOTS = {"slots", "variables"}
+
+
 def _resolve_field(field_path: str, context: dict) -> Any:
     """Resolve dotted field path like 'slots.card_number' from context dict."""
     parts = field_path.split(".")
+    if parts and parts[0] not in _ALLOWED_ROOTS:
+        return _MISSING
     current = context
     for part in parts:
         if isinstance(current, dict) and part in current:

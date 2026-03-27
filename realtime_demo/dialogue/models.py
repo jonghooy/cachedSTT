@@ -79,6 +79,9 @@ class Scenario:
     @classmethod
     def from_dict(cls, data: dict) -> Scenario:
         """Parse scenario from JSON dict."""
+        for field in ("id", "name"):
+            if field not in data:
+                raise ValueError(f"Scenario missing required field: {field}")
         slots = {}
         for name, sdef in data.get("slots", {}).items():
             slots[name] = SlotDef(

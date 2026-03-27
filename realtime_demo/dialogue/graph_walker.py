@@ -70,11 +70,13 @@ class GraphWalker:
     async def _handle_speak(self, node: Node, state: dict, user_text: str) -> DialogueResult:
         ctx = {"slots": state["slots"], "variables": state["variables"]}
         text = render_template(node.data.get("text", ""), ctx)
+        emotion = node.data.get("emotion", "neutral")
         next_id = self.scenario.get_next_node_id(node.id)
         if next_id:
             state["current_node"] = next_id
         else:
             return self._error_result(state, f"Speak node {node.id} has no outgoing edge")
+        state["variables"]["_last_emotion"] = emotion
         return DialogueResult(mode="scenario", response_text=text)
 
     async def _handle_slot_collect(self, node: Node, state: dict, user_text: str) -> DialogueResult:

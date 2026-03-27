@@ -20,11 +20,9 @@ def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
 
 
 class IntentMatcher:
-    def __init__(self, embed_fn=None, llm_engine=None, similarity_threshold: float = 0.5, confidence_threshold: float = 0.7):
+    def __init__(self, embed_fn=None, similarity_threshold: float = 0.5):
         self.embed_fn = embed_fn
-        self.llm_engine = llm_engine
         self.similarity_threshold = similarity_threshold
-        self.confidence_threshold = confidence_threshold
         self._trigger_cache: list[dict] = []
         self._scenarios: dict[str, Scenario] = {}
 
