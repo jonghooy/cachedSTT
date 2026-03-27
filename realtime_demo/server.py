@@ -1295,10 +1295,12 @@ async def websocket_endpoint(websocket: WebSocket):
                 if dialogue_engine:
                     ds = session.get_dialogue_session()
                     _prosody = _compute_prosody(session, session.last_text, buffer_seconds)
+                    logger.info(f"[DialogueEngine] Processing: mode={ds['dialogue_mode']}, text=\"{session.last_text}\", node={ds['scenario_state'].get('current_node')}")
                     d_result = await dialogue_engine.process_utterance(
                         ds, session.last_text, _prosody
                     )
                     session.sync_dialogue_session(ds)
+                    logger.info(f"[DialogueEngine] Result: s2s={d_result.should_use_s2s}, mode={d_result.mode}, text={d_result.response_text[:50] if d_result.response_text else 'None'}, action={d_result.action}, await={d_result.awaiting_input}")
 
                     if not d_result.should_use_s2s:
                         # Add to conversation history for S2S context continuity

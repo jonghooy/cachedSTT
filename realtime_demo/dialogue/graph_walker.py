@@ -71,7 +71,7 @@ class GraphWalker:
 
     async def _handle_speak(self, node: Node, state: dict, user_text: str) -> DialogueResult:
         ctx = {"slots": state["slots"], "variables": state["variables"]}
-        text = render_template(node.data.get("text", ""), ctx)
+        text = render_template(node.data.get("text") or node.data.get("template", ""), ctx)
         emotion = node.data.get("emotion", "neutral")
         next_id = self.scenario.get_next_node_id(node.id)
         if next_id:
@@ -82,7 +82,7 @@ class GraphWalker:
         return DialogueResult(mode="scenario", response_text=text)
 
     async def _handle_slot_collect(self, node: Node, state: dict, user_text: str) -> DialogueResult:
-        target_slot = node.data.get("target_slot")
+        target_slot = node.data.get("target_slot") or node.data.get("slot")  # AI may use "slot" instead of "target_slot"
         slot_def = self.scenario.slots.get(target_slot)
         if not slot_def:
             return self._error_result(state, f"Slot {target_slot} not defined")
@@ -111,7 +111,7 @@ class GraphWalker:
         ctx = {"slots": state["slots"], "variables": state["variables"]}
 
         if mode == "rule":
-            rule = node.data.get("rule", {})
+            rule = node.data.get("rule") or node.data.get("rules", {})
             result = evaluate_rule(rule, ctx)
             label = "true" if result else "false"
         elif mode == "llm":
@@ -134,7 +134,7 @@ class GraphWalker:
         ctx = {"slots": state["slots"], "variables": state["variables"]}
 
         if not state.get("awaiting_confirm"):
-            text = render_template(node.data.get("template", ""), ctx)
+            text = render_template(node.data.get("template") or node.data.get("text", ""), ctx)
             state["awaiting_confirm"] = True
             return DialogueResult(mode="scenario", response_text=text, awaiting_input=True)
         else:
@@ -154,8 +154,8 @@ class GraphWalker:
         action = {
             "type": "api_call",
             "method": node.data.get("method", "GET"),
-            "url": render_template(node.data.get("url", ""), ctx),
-            "body": render_dict(node.data.get("body", {}), ctx) if node.data.get("body") else None,
+            "url": render_template(node.data.get("url") or node.data.get("endpoint", ""), ctx),
+            "body": render_dict(node.data.get("body") or node.data.get("payload") or node.data.get("params", {}), ctx) or None,
             "headers": render_dict(node.data.get("headers", {}), ctx),
             "timeout_ms": node.data.get("timeout_ms", 5000),
             "result_var": node.data.get("result_var"),
