@@ -1123,6 +1123,13 @@
                 }
                 break;
 
+            case 'tts_audio':
+                // 시나리오 TTS 오디오 재생 (S2S TTS와 동일 로직)
+                if (msg.audio) {
+                    enqueueTTSAudio(msg.audio, msg.sample_rate);
+                }
+                break;
+
             case 'language_detected':
                 updateLangBadge(msg.language);
                 break;
