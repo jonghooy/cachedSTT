@@ -33,7 +33,7 @@ STYLETTS2_PATH = "/home/jonghooy/work/zhisper/styletts2_korean"
 # ── vLLM API 설정 ──
 VLLM_BASE_URL = "http://localhost:8000/v1"
 VLLM_MODEL = "/mnt/usb/models/Qwen3.5-9B-AWQ"
-LLM_MAX_TOKENS = 80
+LLM_MAX_TOKENS = 200
 LLM_TEMPERATURE = 0.7
 LLM_TOP_P = 0.9
 
@@ -201,11 +201,14 @@ class TTSEngine:
         """숫자/기호를 한국어 발음으로 변환 (TTS 전처리)."""
         import re as _re
 
+        # 소수점 + %p : "3.0%p" → "3점0퍼센트포인트"
+        text = _re.sub(r'(\d+)\.(\d+)\s*%\s*[pP]', lambda m: f"{m.group(1)}점{m.group(2)}퍼센트포인트", text)
+
+        # 정수 + %p : "3%p" → "3퍼센트포인트"
+        text = _re.sub(r'(\d+)\s*%\s*[pP]', lambda m: f"{m.group(1)}퍼센트포인트", text)
+
         # 소수점 + % : "4.0%" → "4점0퍼센트"
-        def _decimal_pct(m):
-            integer, decimal = m.group(1), m.group(2)
-            return f"{integer}점{decimal}퍼센트"
-        text = _re.sub(r'(\d+)\.(\d+)\s*%', _decimal_pct, text)
+        text = _re.sub(r'(\d+)\.(\d+)\s*%', lambda m: f"{m.group(1)}점{m.group(2)}퍼센트", text)
 
         # 소수점 (% 없는): "3.14" → "3점14"
         text = _re.sub(r'(\d+)\.(\d+)', lambda m: f"{m.group(1)}점{m.group(2)}", text)
