@@ -196,12 +196,12 @@ class TTSEngine:
         self._loaded = True
         logger.info(f"TTS Engine ({self.engine_type}) ready")
 
-    def synthesize_to_pcm16(self, text: str) -> tuple:
+    def synthesize_to_pcm16(self, text: str, language: str = "ko") -> tuple:
         """텍스트 → (PCM int16 bytes, sample_rate)."""
         if not self._loaded:
             self.load()
 
-        result = self.engine.synthesize(text=text, language="ko", speed=1.0)
+        result = self.engine.synthesize(text=text, language=language, speed=1.0)
 
         if self.engine_type == "edge":
             # Edge TTS: 이미 int16 numpy array 반환
@@ -355,6 +355,7 @@ class S2SPipeline:
 
         # Select active TTS engine based on language
         active_tts = self.tts_en if language == "en" else self.tts
+        logger.info(f"[S2S] Language={language}, TTS engine={active_tts.engine_type}")
 
         # Truncate history for context management
         truncated = _truncate_history(history or [])
@@ -471,7 +472,7 @@ class S2SPipeline:
                     yield {"type": "tts_start", "sentence": chunk_text}
 
                     pcm_bytes, sr = await loop.run_in_executor(
-                        None, active_tts.synthesize_to_pcm16, chunk_text
+                        None, active_tts.synthesize_to_pcm16, chunk_text, language
                     )
 
                     if _cancelled():
@@ -497,7 +498,7 @@ class S2SPipeline:
             yield {"type": "tts_start", "sentence": remaining}
 
             pcm_bytes, sr = await loop.run_in_executor(
-                None, active_tts.synthesize_to_pcm16, remaining
+                None, active_tts.synthesize_to_pcm16, remaining, language
             )
 
             if not _cancelled():
