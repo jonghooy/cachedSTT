@@ -1005,33 +1005,6 @@ async def websocket_endpoint(websocket: WebSocket):
     session._skip_dialogue_engine = True  # Start in freeform by default
     logger.info("Session started in freeform mode (use mode toggle for scenario)")
 
-    if False:  # Auto-enter disabled — scenario mode entered via UI toggle only
-        await websocket.send_json({
-            "type": "scenario_response",
-            "text": "",
-            "mode": "scenario",
-            "action": None,
-            "utterance_id": 0,
-        })
-        if s2s_pipeline and s2s_pipeline.tts and s2s_pipeline.tts.is_loaded():
-            try:
-                import base64 as _b64_main
-                pcm_bytes, sr = await loop.run_in_executor(
-                    gpu_executor,
-                    s2s_pipeline.tts.synthesize_to_pcm16,
-                    "",
-                )
-                if pcm_bytes:
-                    await websocket.send_json({
-                        "type": "tts_audio",
-                        "audio": _b64_main.b64encode(pcm_bytes).decode(),
-                        "sample_rate": sr,
-                            "sentence": main_result.response_text,
-                            "sentence_idx": 0,
-                        })
-                except Exception:
-                    pass
-
     # S2S barge-in 상태
     s2s_cancel_event: asyncio.Event = None   # 현재 S2S 취소 이벤트
     s2s_task: asyncio.Task = None            # 현재 S2S 비동기 태스크
