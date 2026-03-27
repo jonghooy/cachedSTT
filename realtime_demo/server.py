@@ -796,6 +796,47 @@ async def test_rule(body: dict):
 HINT_WORDS_PATH = Path(__file__).parent / "rules" / "hint_words.json"
 BOOSTING_ALPHA = 0.5  # boosting tree weight
 
+# 영문자 → 한국어 발음 매핑
+_ALPHA_TO_KO = {
+    'A': '에이', 'B': '비', 'C': '씨', 'D': '디', 'E': '이', 'F': '에프',
+    'G': '지', 'H': '에이치', 'I': '아이', 'J': '제이', 'K': '케이', 'L': '엘',
+    'M': '엠', 'N': '엔', 'O': '오', 'P': '피', 'Q': '큐', 'R': '알',
+    'S': '에스', 'T': '티', 'U': '유', 'V': '브이', 'W': '더블유', 'X': '엑스',
+    'Y': '와이', 'Z': '제트',
+}
+
+def _expand_hint_variants(word: str) -> list:
+    """힌트 단어의 변환 버전 생성 (영문 → 한국어 발음).
+
+    예: "ECS은행" → ["ECS은행", "이씨에스은행"]
+    """
+    import re
+    variants = [word]
+
+    # 영문자가 포함되어 있으면 한국어 발음 버전 추가
+    if re.search(r'[A-Za-z]', word):
+        ko_version = ""
+        for ch in word:
+            upper = ch.upper()
+            if upper in _ALPHA_TO_KO:
+                ko_version += _ALPHA_TO_KO[upper]
+            else:
+                ko_version += ch
+        if ko_version != word:
+            variants.append(ko_version)
+
+    return variants
+
+
+def _expand_all_hints(words: list) -> list:
+    """모든 힌트 단어에 대해 변환 버전 생성."""
+    expanded = []
+    for w in words:
+        for v in _expand_hint_variants(w):
+            if v not in expanded:
+                expanded.append(v)
+    return expanded
+
 def _load_hint_words() -> list:
     """힌트 단어 파일 로드."""
     if HINT_WORDS_PATH.exists():
@@ -817,12 +858,16 @@ def _save_hint_words(words: list):
         json.dump({"words": words}, f, ensure_ascii=False, indent=2)
 
 def _apply_boosting(stt_model, words: list, alpha: float = BOOSTING_ALPHA):
-    """STT 모델에 boosting tree 적용 (또는 해제)."""
+    """STT 모델에 boosting tree 적용 (또는 해제). 영문 힌트는 한국어 발음도 자동 추가."""
     try:
+        # 영문 → 한국어 발음 변환 포함
+        expanded = _expand_all_hints(words) if words else []
+        if expanded and len(expanded) != len(words):
+            logger.info(f"[Hints] Expanded: {words} → {expanded}")
         decoding_cfg = stt_model.cfg.decoding
         with open_dict(decoding_cfg):
-            if words:
-                decoding_cfg.greedy.boosting_tree.key_phrases_list = words
+            if expanded:
+                decoding_cfg.greedy.boosting_tree.key_phrases_list = expanded
                 decoding_cfg.greedy.boosting_tree_alpha = alpha
                 decoding_cfg.greedy.boosting_tree.context_score = 1.0
                 decoding_cfg.greedy.boosting_tree.depth_scaling = 2.0
@@ -830,7 +875,7 @@ def _apply_boosting(stt_model, words: list, alpha: float = BOOSTING_ALPHA):
                 decoding_cfg.greedy.boosting_tree.key_phrases_list = None
                 decoding_cfg.greedy.boosting_tree_alpha = 0.0
         stt_model.change_decoding_strategy(decoding_cfg)
-        logger.info(f"[Hints] Applied {len(words)} words, alpha={alpha if words else 0.0}")
+        logger.info(f"[Hints] Applied {len(expanded)} phrases (from {len(words)} words), alpha={alpha if expanded else 0.0}")
     except Exception as e:
         logger.error(f"[Hints] Failed to apply boosting: {e}")
 
