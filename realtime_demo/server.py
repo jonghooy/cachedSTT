@@ -846,6 +846,40 @@ async def s2s_status():
     }
 
 
+@app.get("/api/scenarios/status")
+async def scenario_status():
+    """Return loaded scenarios status for Brain UI."""
+    if not dialogue_engine or not dialogue_engine.scenario_cache:
+        return {"loaded": False, "scenarios": [], "main_scenario": None}
+
+    scenarios = []
+    main_name = None
+    for s in dialogue_engine.scenario_cache.scenarios.values():
+        info = {
+            "id": s.id,
+            "name": s.name,
+            "status": s.status,
+            "version": s.version,
+            "is_main": getattr(s, '_is_main', False),
+            "node_count": len(s.nodes),
+            "trigger_count": len(s.triggers.get("examples", [])),
+            "slots": list(s.slots.keys()),
+        }
+        scenarios.append(info)
+        if info["is_main"]:
+            main_name = s.name
+
+    trigger_cache_count = len(dialogue_engine.intent_matcher._trigger_cache) if dialogue_engine.intent_matcher else 0
+
+    return {
+        "loaded": True,
+        "scenario_count": len(scenarios),
+        "trigger_cache_count": trigger_cache_count,
+        "main_scenario": main_name,
+        "scenarios": scenarios,
+    }
+
+
 @app.post("/api/knowledge/refresh")
 async def knowledge_refresh(body: dict = {}):
     """Knowledge Service 변경 시 캐시 갱신."""

@@ -525,6 +525,16 @@
                 <div id="test-result"></div>
             </div>
         </div>
+
+        <!-- Scenario Status Panel -->
+        <div id="scenario-panel" style="margin-top: 16px; background: #1a1a2e; border: 1px solid #333; border-radius: 8px; padding: 16px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <h3 style="margin: 0; color: #60a5fa; font-size: 15px;">&#x1F500; Loaded Scenarios</h3>
+            <button onclick="loadScenarioStatus()" style="background: #1e3a5f; color: #60a5fa; border: 1px solid #2563eb; border-radius: 4px; padding: 4px 12px; cursor: pointer; font-size: 12px;">&#xC0C8;&#xB85C;&#xACE0;&#xCE68;</button>
+          </div>
+          <div id="scenario-status" style="color: #94a3b8; font-size: 13px;">&#xB85C;&#xB529; &#xC911;...</div>
+          <div id="scenario-list" style="margin-top: 8px;"></div>
+        </div>
     </div>
 
     <script>
@@ -1286,6 +1296,63 @@
         document.getElementById('test-result').innerHTML =
             `"${data.text}" → <span class="turn-badge ${data.ending}">${endingKo[data.ending] || data.ending}</span> EOU: ${data.eou}`;
     }
+
+    // Scenario Status
+    async function loadScenarioStatus() {
+      try {
+        const resp = await fetch('/api/scenarios/status');
+        const data = await resp.json();
+
+        const statusEl = document.getElementById('scenario-status');
+        const listEl = document.getElementById('scenario-list');
+
+        if (!data.loaded) {
+          statusEl.innerHTML = '<span style="color: #f59e0b;">&#x26A0; Dialogue Engine &#xBBF8;&#xB85C;&#xB529;</span>';
+          listEl.innerHTML = '';
+          return;
+        }
+
+        statusEl.innerHTML =
+          `<span style="color: #4ade80;">&#x2713; ${data.scenario_count}&#xAC1C; &#xC2DC;&#xB098;&#xB9AC;&#xC624; &#xB85C;&#xB529;&#xB428;</span>` +
+          ` | &#xD2B8;&#xB9AC;&#xAC70; &#xCE90;&#xC2DC;: ${data.trigger_cache_count}&#xAC1C;` +
+          (data.main_scenario ? ` | &#xBA54;&#xC778;: <span style="color: #fbbf24;">&#x1F451; ${data.main_scenario}</span>` : ' | <span style="color: #6b7280;">&#xBA54;&#xC778; &#xC2DC;&#xB098;&#xB9AC;&#xC624; &#xC5C6;&#xC74C;</span>');
+
+        let html = '<table style="width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 12px;">';
+        html += '<tr style="color: #6b7280; border-bottom: 1px solid #333;">' +
+          '<th style="text-align: left; padding: 4px 8px;">&#xC2DC;&#xB098;&#xB9AC;&#xC624;</th>' +
+          '<th style="text-align: center; padding: 4px;">&#xB178;&#xB4DC;</th>' +
+          '<th style="text-align: center; padding: 4px;">&#xD2B8;&#xB9AC;&#xAC70;</th>' +
+          '<th style="text-align: center; padding: 4px;">&#xC2AC;&#xB86F;</th>' +
+          '<th style="text-align: center; padding: 4px;">v</th></tr>';
+
+        for (const s of data.scenarios) {
+          const mainBadge = s.is_main ? '<span style="color: #fbbf24; margin-right: 4px;">&#x1F451;</span>' : '';
+          const statusColor = s.status === 'active' ? '#4ade80' : '#f59e0b';
+          html += `<tr style="border-bottom: 1px solid #222;">` +
+            `<td style="padding: 6px 8px; color: #e2e8f0;">${mainBadge}${s.name}</td>` +
+            `<td style="text-align: center; padding: 4px; color: #94a3b8;">${s.node_count}</td>` +
+            `<td style="text-align: center; padding: 4px; color: #94a3b8;">${s.trigger_count}</td>` +
+            `<td style="text-align: center; padding: 4px; color: #94a3b8;">${s.slots.join(', ') || '-'}</td>` +
+            `<td style="text-align: center; padding: 4px; color: ${statusColor};">v${s.version}</td>` +
+            `</tr>`;
+        }
+        html += '</table>';
+
+        if (data.scenarios.length === 0) {
+          html = '<div style="text-align: center; color: #6b7280; padding: 12px;">&#xB4F1;&#xB85D;&#xB41C; &#xC2DC;&#xB098;&#xB9AC;&#xC624;&#xAC00; &#xC5C6;&#xC2B5;&#xB2C8;&#xB2E4;. Knowledge Service&#xC5D0;&#xC11C; &#xC2DC;&#xB098;&#xB9AC;&#xC624;&#xB97C; &#xC0DD;&#xC131;&#xD558;&#xACE0; &#xBC30;&#xD3EC;&#xD558;&#xC138;&#xC694;.</div>';
+        }
+
+        listEl.innerHTML = html;
+      } catch (e) {
+        document.getElementById('scenario-status').innerHTML =
+          '<span style="color: #ef4444;">&#x2717; &#xC2DC;&#xB098;&#xB9AC;&#xC624; &#xC0C1;&#xD0DC; &#xC870;&#xD68C; &#xC2E4;&#xD328;: ' + e.message + '</span>';
+      }
+    }
+
+    // Load scenario status on page load
+    loadScenarioStatus();
+    // Auto-refresh every 30 seconds
+    setInterval(loadScenarioStatus, 30000);
     </script>
 </body>
 </html>
