@@ -619,8 +619,24 @@ async def startup():
         logging.warning("Could not load scenarios from Knowledge Service — running in freeform-only mode")
 
     slot_manager_d = SlotManager(llm_engine=s2s_pipeline.llm if s2s_pipeline else None)
-    intent_matcher = IntentMatcher(embed_fn=None)
+    # embed_fn: calls Knowledge Service to embed user text
+    import numpy as np
+    _embed_client = knowledge_client  # may be None
+    async def _embed_fn(text: str):
+        if _embed_client is None:
+            return np.zeros(1024, dtype=np.float32)
+        vec = await _embed_client.embed(text)
+        if vec:
+            return np.array(vec, dtype=np.float32)
+        return np.zeros(1024, dtype=np.float32)
+
+    intent_matcher = IntentMatcher(embed_fn=_embed_fn)
     intent_matcher.set_scenarios(scenario_cache.scenarios)
+    # Load pre-computed trigger embeddings from Knowledge Service
+    trigger_data = scenario_cache.get_trigger_data_with_embeddings()
+    if trigger_data:
+        intent_matcher.load_trigger_cache(trigger_data)
+        logging.info(f"Loaded {sum(len(t['triggers']) for t in trigger_data)} trigger embeddings")
     action_runner = ActionRunner(knowledge_client=knowledge_client)
 
     dialogue_engine = DialogueEngine(
@@ -748,6 +764,9 @@ async def knowledge_refresh(body: dict = {}):
             dialogue_engine.intent_matcher.set_scenarios(
                 dialogue_engine.scenario_cache.scenarios
             )
+            trigger_data = dialogue_engine.scenario_cache.get_trigger_data_with_embeddings()
+            if trigger_data:
+                dialogue_engine.intent_matcher.load_trigger_cache(trigger_data)
             return {"status": "refreshed", "scenarios": len(dialogue_engine.scenario_cache.scenarios)}
         return {"status": "refreshed" if success else "failed"}
     return {"status": "no_client"}
@@ -1076,6 +1095,26 @@ async def websocket_endpoint(websocket: WebSocket):
                                 "action": d_result.action,
                                 "utterance_id": session.utterance_count,
                             })
+                            # TTS synthesis for scenario response
+                            if s2s_pipeline and s2s_pipeline.tts and s2s_pipeline.tts.is_loaded():
+                                try:
+                                    import base64
+                                    loop = asyncio.get_event_loop()
+                                    pcm_bytes, sr = await loop.run_in_executor(
+                                        gpu_executor,
+                                        s2s_pipeline.tts.synthesize_to_pcm16,
+                                        d_result.response_text,
+                                    )
+                                    if pcm_bytes:
+                                        await websocket.send_json({
+                                            "type": "tts_audio",
+                                            "audio": base64.b64encode(pcm_bytes).decode(),
+                                            "sample_rate": sr,
+                                            "sentence": d_result.response_text,
+                                            "sentence_idx": 0,
+                                        })
+                                except Exception as e:
+                                    logger.warning(f"Scenario TTS failed: {e}")
                         session.reset_for_new_utterance(keep_tail_seconds=0.5)
                         continue
                 # ── End Dialogue Engine ──

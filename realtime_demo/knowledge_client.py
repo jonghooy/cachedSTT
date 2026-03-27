@@ -86,5 +86,16 @@ class KnowledgeClient:
             lines.append("")
         return "\n".join(lines)
 
+    async def embed(self, text: str) -> list[float]:
+        """Get BGE-M3 embedding vector from Knowledge Service."""
+        try:
+            resp = await self._client.post("/embed", json={"text": text})
+            if resp.status_code == 200:
+                data = resp.json()
+                return data.get("embedding", [])
+        except Exception as e:
+            logger.warning(f"[Knowledge] Embed failed: {e}")
+        return []
+
     def is_loaded(self) -> bool:
         return self._loaded

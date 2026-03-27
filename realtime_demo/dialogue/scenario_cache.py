@@ -16,6 +16,7 @@ class ScenarioCache:
         self.knowledge_base_url = knowledge_base_url
         self.scenarios: dict[str, Scenario] = {}
         self._version: str | None = None
+        self._trigger_data: list[dict] = []
 
     def load_from_dicts(self, scenario_dicts: list[dict]):
         self.scenarios.clear()
@@ -38,6 +39,22 @@ class ScenarioCache:
                 scenario_list = data.get("scenarios", [])
                 self._version = data.get("version")
                 self.load_from_dicts(scenario_list)
+                # Extract trigger embeddings for IntentMatcher
+                self._trigger_data = []
+                for s_data in scenario_list:
+                    sid = s_data.get("id")
+                    triggers = s_data.get("triggers_json", {})
+                    if isinstance(triggers, str):
+                        import json
+                        triggers = json.loads(triggers)
+                    examples = triggers.get("examples", []) if isinstance(triggers, dict) else []
+                    embeddings = s_data.get("trigger_embeddings", [])
+                    if examples and embeddings and len(examples) == len(embeddings):
+                        self._trigger_data.append({
+                            "scenario_id": str(sid),
+                            "triggers": examples,
+                            "embeddings": embeddings,
+                        })
                 logger.info(f"Loaded {len(self.scenarios)} active scenarios (version: {self._version})")
                 return True
         except Exception:
@@ -49,6 +66,10 @@ class ScenarioCache:
 
     def get_active_scenarios(self) -> list[Scenario]:
         return list(self.scenarios.values())
+
+    def get_trigger_data_with_embeddings(self) -> list[dict]:
+        """Return trigger data with pre-computed embeddings for IntentMatcher."""
+        return self._trigger_data
 
     def get_trigger_data(self) -> list[dict]:
         result = []
