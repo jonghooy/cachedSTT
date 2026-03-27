@@ -995,12 +995,13 @@ async def websocket_endpoint(websocket: WebSocket):
                 if msg.get("type") == "set_language":
                     new_lang = msg.get("language", "ko")
                     if new_lang in ("ko", "en"):
+                        session.language_mode = new_lang  # 고정 모드로 전환
                         session.detected_language = new_lang
                         session.lang_detected = True
                         session._init_caches()
                         session.reset_for_new_utterance()
                         await websocket.send_json({"type": "language_changed", "language": new_lang})
-                        logger.info(f"[Lang] Manual: {new_lang}")
+                        logger.info(f"[Lang] Manual: {new_lang} (mode={new_lang})")
                     continue
 
             # 바이너리 메시지 (오디오)
@@ -1214,6 +1215,17 @@ async def websocket_endpoint(websocket: WebSocket):
                     session.sync_dialogue_session(ds)
 
                     if not d_result.should_use_s2s:
+                        # Add to conversation history for S2S context continuity
+                        session.conversation_history.append({
+                            "role": "user",
+                            "content": session.last_text,
+                        })
+                        if d_result.response_text:
+                            session.conversation_history.append({
+                                "role": "assistant",
+                                "content": d_result.response_text,
+                            })
+
                         if d_result.response_text:
                             await websocket.send_json({
                                 "type": "scenario_response",
@@ -1222,24 +1234,36 @@ async def websocket_endpoint(websocket: WebSocket):
                                 "action": d_result.action,
                                 "utterance_id": session.utterance_count,
                             })
-                            # TTS synthesis for scenario response
+                            # TTS synthesis for scenario response (sentence-level with barge-in)
                             if s2s_pipeline and s2s_pipeline.tts and s2s_pipeline.tts.is_loaded():
                                 try:
                                     import base64
+                                    import re as _re_tts
                                     loop = asyncio.get_event_loop()
-                                    pcm_bytes, sr = await loop.run_in_executor(
-                                        gpu_executor,
-                                        s2s_pipeline.tts.synthesize_to_pcm16,
-                                        d_result.response_text,
-                                    )
-                                    if pcm_bytes:
-                                        await websocket.send_json({
-                                            "type": "tts_audio",
-                                            "audio": base64.b64encode(pcm_bytes).decode(),
-                                            "sample_rate": sr,
-                                            "sentence": d_result.response_text,
-                                            "sentence_idx": 0,
-                                        })
+                                    # Split response into sentences for incremental TTS
+                                    sentences = _re_tts.split(r'(?<=[.?!。]) ', d_result.response_text)
+                                    if not sentences:
+                                        sentences = [d_result.response_text]
+                                    for sent_idx, sentence in enumerate(sentences):
+                                        if not sentence.strip():
+                                            continue
+                                        # Check barge-in: if new audio arrived, skip remaining TTS
+                                        if session.is_speaking:
+                                            logger.info("[Scenario TTS] Barge-in detected, stopping TTS")
+                                            break
+                                        pcm_bytes, sr = await loop.run_in_executor(
+                                            gpu_executor,
+                                            s2s_pipeline.tts.synthesize_to_pcm16,
+                                            sentence,
+                                        )
+                                        if pcm_bytes:
+                                            await websocket.send_json({
+                                                "type": "tts_audio",
+                                                "audio": base64.b64encode(pcm_bytes).decode(),
+                                                "sample_rate": sr,
+                                                "sentence": sentence,
+                                                "sentence_idx": sent_idx,
+                                            })
                                 except Exception as e:
                                     logger.warning(f"Scenario TTS failed: {e}")
                         session.reset_for_new_utterance(keep_tail_seconds=0.5)
