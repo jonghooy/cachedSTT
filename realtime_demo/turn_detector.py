@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 # 어미 유형별 기본 EOU 점수
 _BASE_SCORES = {
     "final": 0.85,         # 종결어미 (EF)
-    "interjection": 0.9,   # 감탄사 (IC)
+    "interjection": 0.4,   # 감탄사 (IC) — 후속 발화 가능성 고려, silence 1.0초 대기
     "connective": 0.15,    # 연결어미 (EC), 접속부사 (MAJ)
     "transformative": 0.2, # 전성어미 (ETN, ETM)
     "incomplete": 0.15,    # 조사, 명사 단독

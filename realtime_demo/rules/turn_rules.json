@@ -69,6 +69,11 @@
       "suffix": "잖아",
       "ending": "final",
       "note": "~잖아 (확인 종결)"
+    },
+    {
+      "suffix": "너가",
+      "ending": "incomplete",
+      "note": ""
     }
   ]
 }

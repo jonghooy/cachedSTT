@@ -34,7 +34,9 @@ class GraphWalker:
                 return self._error_result(state, f"Node {node_id} not found")
 
             visit_count = state["history"].count(node_id)
-            if visit_count >= MAX_VISITS_PER_NODE:
+            # intent_route and confirm nodes are expected to be revisited in loops
+            loop_limit = MAX_VISITS_PER_NODE * 5 if node.type in ("intent_route", "confirm") else MAX_VISITS_PER_NODE
+            if visit_count >= loop_limit:
                 logger.warning(f"Infinite loop detected at node {node_id}")
                 return DialogueResult(
                     mode="scenario",
