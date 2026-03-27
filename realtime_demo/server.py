@@ -1303,9 +1303,11 @@ async def websocket_endpoint(websocket: WebSocket):
 
                 is_noise = False
                 noise_reason = ""
-                if buffer_seconds > 8 and text_density < 0.5:
+                # Only apply density filter if text is also very short (< 4 chars)
+                # Long buffer with reasonable text = TTS was playing, not noise
+                if buffer_seconds > 8 and text_density < 0.5 and text_chars < 4:
                     is_noise = True
-                    noise_reason = f"low_density({text_density:.1f}c/s,{buffer_seconds:.0f}s)"
+                    noise_reason = f"low_density({text_density:.1f}c/s,{buffer_seconds:.0f}s,{text_chars}chars)"
 
                 if is_noise:
                     logger.info(
